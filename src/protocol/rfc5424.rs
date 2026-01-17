@@ -66,8 +66,8 @@ fn parse_string_or_nil(input: &str) -> IResult<&str, Option<String>> {
 }
 
 type RFC5424Header<'a> = (
-    u8,             // pri
-    u8,             // version
+    u8, // pri
+    u8, // version
     Option<DateTime<Utc>>,
     Option<String>, // hostname
     Option<String>, // app_name

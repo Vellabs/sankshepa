@@ -145,7 +145,7 @@ impl LogChunk {
         sim_count as f32 / template.len() as f32 >= 0.5
     }
 
-fn merge_into_template(&self, template: &mut [String], tokens: &[String]) {
+    fn merge_into_template(&self, template: &mut [String], tokens: &[String]) {
         for i in 0..template.len() {
             if template[i] != tokens[i] && template[i] != "<*>" {
                 template[i] = "<*>".to_string();

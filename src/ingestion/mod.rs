@@ -87,7 +87,10 @@ impl IngestionServer {
                             }
                             len_bytes.push(b[0]);
                         }
-                        if let Some(len) = String::from_utf8(len_bytes).ok().and_then(|s| s.parse::<usize>().ok()) {
+                        if let Some(len) = String::from_utf8(len_bytes)
+                            .ok()
+                            .and_then(|s| s.parse::<usize>().ok())
+                        {
                             let mut msg_buf = vec![0u8; len];
                             if reader.read_exact(&mut msg_buf).await.is_ok() {
                                 let data = String::from_utf8_lossy(&msg_buf);

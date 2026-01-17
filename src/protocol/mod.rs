@@ -24,7 +24,8 @@ pub struct UnifiedParser;
 impl UnifiedParser {
     pub fn parse(input: &str) -> anyhow::Result<SyslogMessage> {
         // Simple heuristic: if the char after > is a digit, it's likely RFC 5424
-        let is_rfc5424 = input.find('>')
+        let is_rfc5424 = input
+            .find('>')
             .and_then(|pos| input.chars().nth(pos + 1))
             .is_some_and(|c| c.is_ascii_digit());
 
