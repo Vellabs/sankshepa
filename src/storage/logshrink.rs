@@ -13,11 +13,11 @@ pub struct Template {
 pub struct LogRecord {
     pub timestamp: i64,
     pub priority: u8,
-    pub hostname: Option<String>,
-    pub app_name: Option<String>,
-    pub procid: Option<String>,
-    pub msgid: Option<String>,
-    pub structured_data: Option<String>,
+    pub hostname_id: Option<u32>,
+    pub app_name_id: Option<u32>,
+    pub procid_id: Option<u32>,
+    pub msgid_id: Option<u32>,
+    pub structured_data_id: Option<u32>,
     pub template_id: u32,
     pub variables: Vec<String>,
     pub is_rfc5424: bool,
@@ -26,6 +26,8 @@ pub struct LogRecord {
 pub struct LogChunk {
     pub raw_messages: Vec<SyslogMessage>,
     pub templates: HashMap<String, u32>,
+    pub string_pool: Vec<String>,
+    pub string_map: HashMap<String, u32>,
     pub records: Vec<LogRecord>,
     pub next_template_id: u32,
 }
@@ -33,10 +35,24 @@ pub struct LogChunk {
 impl LogChunk {
     pub fn new() -> Self {
         Self {
-            raw_messages: Vec::new(),
+            raw_messages: Vec::with_capacity(10),
             templates: HashMap::new(),
-            records: Vec::new(),
+            string_pool: Vec::new(),
+            string_map: HashMap::new(),
+            records: Vec::with_capacity(10),
             next_template_id: 0,
+        }
+    }
+
+    fn intern_string(&mut self, s: Option<String>) -> Option<u32> {
+        let s = s?;
+        if let Some(&id) = self.string_map.get(&s) {
+            Some(id)
+        } else {
+            let id = self.string_pool.len() as u32;
+            self.string_map.insert(s.clone(), id);
+            self.string_pool.push(s);
+            Some(id)
         }
     }
 
@@ -101,7 +117,7 @@ impl LogChunk {
             };
 
             for &idx in &member_indices {
-                let msg = &self.raw_messages[idx];
+                let msg = self.raw_messages[idx].clone();
                 let msg_tokens: Vec<&str> = msg.message.split_whitespace().collect();
                 let mut variables = Vec::new();
 
@@ -111,14 +127,20 @@ impl LogChunk {
                     }
                 }
 
+                let hostname_id = self.intern_string(msg.hostname);
+                let app_name_id = self.intern_string(msg.app_name);
+                let procid_id = self.intern_string(msg.procid);
+                let msgid_id = self.intern_string(msg.msgid);
+                let structured_data_id = self.intern_string(msg.structured_data);
+
                 self.records.push(LogRecord {
                     timestamp: msg.timestamp.unwrap_or_else(Utc::now).timestamp_millis(),
                     priority: msg.priority,
-                    hostname: msg.hostname.clone(),
-                    app_name: msg.app_name.clone(),
-                    procid: msg.procid.clone(),
-                    msgid: msg.msgid.clone(),
-                    structured_data: msg.structured_data.clone(),
+                    hostname_id,
+                    app_name_id,
+                    procid_id,
+                    msgid_id,
+                    structured_data_id,
                     template_id,
                     variables,
                     is_rfc5424: msg.is_rfc5424,

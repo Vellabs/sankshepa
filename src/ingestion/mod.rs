@@ -2,6 +2,7 @@ use crate::protocol::{SyslogMessage, UnifiedParser};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
+use tracing::info;
 
 pub struct IngestionServer {
     udp_addr: String,
@@ -35,7 +36,7 @@ impl IngestionServer {
     }
 
     async fn run_beep(addr: String, _tx: mpsc::Sender<SyslogMessage>) -> anyhow::Result<()> {
-        println!("BEEP listener (RFC 3195) started on {} [STUB]", addr);
+        info!("BEEP listener (RFC 3195) started on {} [STUB]", addr);
         // BEEP implementation would go here.
         // For now, we just keep the port open.
         let listener = TcpListener::bind(&addr).await?;
@@ -46,7 +47,7 @@ impl IngestionServer {
 
     async fn run_udp(addr: String, tx: mpsc::Sender<SyslogMessage>) -> anyhow::Result<()> {
         let socket = UdpSocket::bind(&addr).await?;
-        println!("UDP listener started on {}", addr);
+        info!("UDP listener started on {}", addr);
         let mut buf = [0u8; 65535];
 
         loop {
@@ -60,7 +61,7 @@ impl IngestionServer {
 
     async fn run_tcp(addr: String, tx: mpsc::Sender<SyslogMessage>) -> anyhow::Result<()> {
         let listener = TcpListener::bind(&addr).await?;
-        println!("TCP listener started on {}", addr);
+        info!("TCP listener started on {}", addr);
 
         loop {
             let (socket, _) = listener.accept().await?;

@@ -8,6 +8,7 @@ use ingestion::IngestionServer;
 use storage::StorageEngine;
 use storage::logshrink::LogChunk;
 use tokio::sync::mpsc;
+use tracing::{error, info};
 
 #[derive(Parser)]
 #[command(name = "sankshepa")]
@@ -77,14 +78,14 @@ async fn main() -> anyhow::Result<()> {
                                 let _ = StorageEngine::save_chunk(chunk, &output_path);
                                 chunk = LogChunk::new();
                                 count = 0;
-                                println!("Saved chunk to {}", output_path);
+                                info!("Saved chunk to {}", output_path);
                             }
                         }
                         _ = tokio::signal::ctrl_c() => {
                             if count > 0 {
                                 chunk.finish_and_process();
                                 let _ = StorageEngine::save_chunk(chunk, &output_path);
-                                println!("Saved final chunk on Ctrl-C");
+                                info!("Saved final chunk on Ctrl-C");
                             }
                             break;
                         }
@@ -95,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::select! {
                 res = server.run() => {
                     if let Err(e) = res {
-                        eprintln!("Server error: {}", e);
+                        error!("Server error: {}", e);
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
@@ -127,11 +128,31 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 if let Some(dt) = Utc.timestamp_millis_opt(record.timestamp).earliest() {
-                    let host = record.hostname.as_deref().unwrap_or("-");
-                    let app = record.app_name.as_deref().unwrap_or("-");
-                    let proc = record.procid.as_deref().unwrap_or("-");
-                    let msgid = record.msgid.as_deref().unwrap_or("-");
-                    let sd = record.structured_data.as_deref().unwrap_or("-");
+                    let host = record
+                        .hostname_id
+                        .and_then(|id| chunk.string_pool.get(id as usize))
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
+                    let app = record
+                        .app_name_id
+                        .and_then(|id| chunk.string_pool.get(id as usize))
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
+                    let proc = record
+                        .procid_id
+                        .and_then(|id| chunk.string_pool.get(id as usize))
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
+                    let msgid = record
+                        .msgid_id
+                        .and_then(|id| chunk.string_pool.get(id as usize))
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
+                    let sd = record
+                        .structured_data_id
+                        .and_then(|id| chunk.string_pool.get(id as usize))
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
 
                     if record.is_rfc5424 {
                         println!(
@@ -183,7 +204,7 @@ async fn main() -> anyhow::Result<()> {
                     stream.write_all(msg.as_bytes()).await?;
                 }
             }
-            println!("Generated {} messages to {}", count, addr);
+            info!("Generated {} messages to {}", count, addr);
         }
     }
 

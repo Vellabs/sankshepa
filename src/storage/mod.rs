@@ -9,13 +9,14 @@ use zstd::stream::{decode_all, encode_all};
 #[derive(Serialize, Deserialize)]
 pub struct CompressedChunk {
     pub templates: Vec<Template>,
+    pub string_pool: Vec<String>,
     pub timestamp_block: Vec<u8>,
     pub priority_block: Vec<u8>,
-    pub hostname_block: Vec<u8>,
-    pub app_name_block: Vec<u8>,
-    pub procid_block: Vec<u8>,
-    pub msgid_block: Vec<u8>,
-    pub sd_block: Vec<u8>,
+    pub hostname_id_block: Vec<u8>,
+    pub app_name_id_block: Vec<u8>,
+    pub procid_id_block: Vec<u8>,
+    pub msgid_id_block: Vec<u8>,
+    pub sd_id_block: Vec<u8>,
     pub template_id_block: Vec<u8>,
     pub variable_block: Vec<u8>,
     pub is_rfc5424_block: Vec<u8>,
@@ -36,11 +37,11 @@ impl StorageEngine {
         // Columnar extraction
         let mut timestamps = Vec::new();
         let mut priorities = Vec::new();
-        let mut hostnames = Vec::new();
-        let mut app_names = Vec::new();
-        let mut procids = Vec::new();
-        let mut msgids = Vec::new();
-        let mut sds = Vec::new();
+        let mut hostname_ids = Vec::new();
+        let mut app_name_ids = Vec::new();
+        let mut procid_ids = Vec::new();
+        let mut msgid_ids = Vec::new();
+        let mut sd_ids = Vec::new();
         let mut ids = Vec::new();
         let mut variables = Vec::new();
         let mut is_rfc5424s = Vec::new();
@@ -48,11 +49,11 @@ impl StorageEngine {
         for record in chunk.records {
             timestamps.push(record.timestamp);
             priorities.push(record.priority);
-            hostnames.push(record.hostname);
-            app_names.push(record.app_name);
-            procids.push(record.procid);
-            msgids.push(record.msgid);
-            sds.push(record.structured_data);
+            hostname_ids.push(record.hostname_id);
+            app_name_ids.push(record.app_name_id);
+            procid_ids.push(record.procid_id);
+            msgid_ids.push(record.msgid_id);
+            sd_ids.push(record.structured_data_id);
             ids.push(record.template_id);
             variables.push(record.variables);
             is_rfc5424s.push(record.is_rfc5424);
@@ -69,24 +70,25 @@ impl StorageEngine {
 
         let ts_data = bincode::serialize(&delta_ts)?;
         let pri_data = priorities;
-        let host_data = bincode::serialize(&hostnames)?;
-        let app_data = bincode::serialize(&app_names)?;
-        let proc_data = bincode::serialize(&procids)?;
-        let msgid_data = bincode::serialize(&msgids)?;
-        let sd_data = bincode::serialize(&sds)?;
+        let host_data = bincode::serialize(&hostname_ids)?;
+        let app_data = bincode::serialize(&app_name_ids)?;
+        let proc_data = bincode::serialize(&procid_ids)?;
+        let msgid_data = bincode::serialize(&msgid_ids)?;
+        let sd_data = bincode::serialize(&sd_ids)?;
         let id_data = bincode::serialize(&ids)?;
         let var_data = bincode::serialize(&variables)?;
         let rfc_data = bincode::serialize(&is_rfc5424s)?;
 
         let compressed = CompressedChunk {
             templates,
+            string_pool: chunk.string_pool,
             timestamp_block: encode_all(&ts_data[..], 3)?,
             priority_block: encode_all(&pri_data[..], 3)?,
-            hostname_block: encode_all(&host_data[..], 3)?,
-            app_name_block: encode_all(&app_data[..], 3)?,
-            procid_block: encode_all(&proc_data[..], 3)?,
-            msgid_block: encode_all(&msgid_data[..], 3)?,
-            sd_block: encode_all(&sd_data[..], 3)?,
+            hostname_id_block: encode_all(&host_data[..], 3)?,
+            app_name_id_block: encode_all(&app_data[..], 3)?,
+            procid_id_block: encode_all(&proc_data[..], 3)?,
+            msgid_id_block: encode_all(&msgid_data[..], 3)?,
+            sd_id_block: encode_all(&sd_data[..], 3)?,
             template_id_block: encode_all(&id_data[..], 3)?,
             variable_block: encode_all(&var_data[..], 3)?,
             is_rfc5424_block: encode_all(&rfc_data[..], 3)?,
@@ -121,20 +123,20 @@ impl StorageEngine {
 
         let priorities = decode_all(&compressed.priority_block[..])?;
 
-        let host_data = decode_all(&compressed.hostname_block[..])?;
-        let hostnames: Vec<Option<String>> = bincode::deserialize(&host_data)?;
+        let host_data = decode_all(&compressed.hostname_id_block[..])?;
+        let hostname_ids: Vec<Option<u32>> = bincode::deserialize(&host_data)?;
 
-        let app_data = decode_all(&compressed.app_name_block[..])?;
-        let app_names: Vec<Option<String>> = bincode::deserialize(&app_data)?;
+        let app_data = decode_all(&compressed.app_name_id_block[..])?;
+        let app_name_ids: Vec<Option<u32>> = bincode::deserialize(&app_data)?;
 
-        let proc_data = decode_all(&compressed.procid_block[..])?;
-        let procids: Vec<Option<String>> = bincode::deserialize(&proc_data)?;
+        let proc_data = decode_all(&compressed.procid_id_block[..])?;
+        let procid_ids: Vec<Option<u32>> = bincode::deserialize(&proc_data)?;
 
-        let msgid_data = decode_all(&compressed.msgid_block[..])?;
-        let msgids: Vec<Option<String>> = bincode::deserialize(&msgid_data)?;
+        let msgid_data = decode_all(&compressed.msgid_id_block[..])?;
+        let msgid_ids: Vec<Option<u32>> = bincode::deserialize(&msgid_data)?;
 
-        let sd_data = decode_all(&compressed.sd_block[..])?;
-        let sds: Vec<Option<String>> = bincode::deserialize(&sd_data)?;
+        let sd_data = decode_all(&compressed.sd_id_block[..])?;
+        let sd_ids: Vec<Option<u32>> = bincode::deserialize(&sd_data)?;
 
         let id_data = decode_all(&compressed.template_id_block[..])?;
         let ids: Vec<u32> = bincode::deserialize(&id_data)?;
@@ -146,6 +148,7 @@ impl StorageEngine {
         let is_rfc5424s: Vec<bool> = bincode::deserialize(&rfc_data)?;
 
         let mut chunk = LogChunk::new();
+        chunk.string_pool = compressed.string_pool;
         for t in compressed.templates {
             chunk.templates.insert(t.pattern, t.id);
         }
@@ -155,11 +158,11 @@ impl StorageEngine {
             chunk.records.push(LogRecord {
                 timestamp: timestamps[i],
                 priority: priorities[i],
-                hostname: hostnames[i].clone(),
-                app_name: app_names[i].clone(),
-                procid: procids[i].clone(),
-                msgid: msgids[i].clone(),
-                structured_data: sds[i].clone(),
+                hostname_id: hostname_ids[i],
+                app_name_id: app_name_ids[i],
+                procid_id: procid_ids[i],
+                msgid_id: msgid_ids[i],
+                structured_data_id: sd_ids[i],
                 template_id: ids[i],
                 variables: variables[i].clone(),
                 is_rfc5424: is_rfc5424s[i],
@@ -204,14 +207,16 @@ mod tests {
         let loaded_chunk = StorageEngine::load_chunk(path).unwrap();
 
         assert_eq!(loaded_chunk.records.len(), 1);
-        assert_eq!(
-            loaded_chunk.records[0].hostname,
-            Some("testhost".to_string())
-        );
-        assert_eq!(
-            loaded_chunk.records[0].app_name,
-            Some("testapp".to_string())
-        );
+        let hostname = loaded_chunk.records[0]
+            .hostname_id
+            .and_then(|id| loaded_chunk.string_pool.get(id as usize))
+            .unwrap();
+        assert_eq!(hostname, "testhost");
+        let app_name = loaded_chunk.records[0]
+            .app_name_id
+            .and_then(|id| loaded_chunk.string_pool.get(id as usize))
+            .unwrap();
+        assert_eq!(app_name, "testapp");
         assert_eq!(loaded_chunk.templates.len(), 1);
 
         fs::remove_file(path).unwrap();
