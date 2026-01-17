@@ -1,0 +1,5 @@
+/target
+*.lshrink
+.DS_Store
+*.bak
+*.swp
