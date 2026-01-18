@@ -99,11 +99,10 @@ async fn main() -> anyhow::Result<()> {
             let ui_server = UiServer::new(ui_tx.clone());
             let node_id = node_id.unwrap_or_else(|| format!("node-{}", std::process::id()));
             let cluster_socket_addr: SocketAddr = cluster_addr.parse()?;
-            let peer_addrs: Vec<SocketAddr> = peers.iter().filter_map(|p| p.parse().ok()).collect();
             let cluster_manager = ClusterManager::new(
                 node_id.clone(),
                 cluster_socket_addr,
-                peer_addrs,
+                peers,
                 cluster_template_tx.clone(),
             );
 

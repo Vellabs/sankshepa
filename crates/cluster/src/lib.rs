@@ -29,7 +29,7 @@ pub struct ClusterManager {
     node_id: String,
     bind_addr: SocketAddr,
     peers: Arc<RwLock<HashMap<SocketAddr, PeerInfo>>>,
-    known_peers: Vec<SocketAddr>,
+    known_peers: Vec<String>,
     pub template_tx: mpsc::Sender<String>,
     template_rx: Arc<RwLock<mpsc::Receiver<String>>>,
     ext_template_tx: broadcast::Sender<String>,
@@ -39,7 +39,7 @@ impl ClusterManager {
     pub fn new(
         node_id: String,
         bind_addr: SocketAddr,
-        initial_peers: Vec<SocketAddr>,
+        initial_peers: Vec<String>,
         ext_template_tx: broadcast::Sender<String>,
     ) -> Self {
         let (tx, rx) = mpsc::channel(100);
@@ -79,7 +79,11 @@ impl ClusterManager {
                 };
                 let bytes = serde_json::to_vec(&msg).unwrap();
                 for peer in &initial_peers {
-                    let _ = socket_send.send_to(&bytes, peer).await;
+                    if let Ok(addrs) = tokio::net::lookup_host(peer).await {
+                        for addr in addrs {
+                            let _ = socket_send.send_to(&bytes, addr).await;
+                        }
+                    }
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }

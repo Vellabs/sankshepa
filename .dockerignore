@@ -1,0 +1,9 @@
+target/
+**/*.rs.bk
+.git/
+.github/
+deploy/
+docs/
+bench_postcard.lshrink
+*.lshrink
+Cargo.lock
