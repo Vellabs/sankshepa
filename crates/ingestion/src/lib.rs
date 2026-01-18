@@ -1,8 +1,8 @@
-use crate::protocol::{SyslogMessage, UnifiedParser};
-use tokio::io::{AsyncReadExt, BufReader};
+use sankshepa_protocol::{SyslogMessage, UnifiedParser};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn, debug};
 
 pub struct IngestionServer {
     udp_addr: String,
@@ -53,8 +53,14 @@ impl IngestionServer {
         loop {
             let (len, _) = socket.recv_from(&mut buf).await?;
             let data = String::from_utf8_lossy(&buf[..len]);
-            if let Ok(msg) = UnifiedParser::parse(&data) {
-                let _ = tx.send(msg).await;
+            debug!("UDP received: {}", data.trim());
+            match UnifiedParser::parse(&data) {
+                Ok(msg) => {
+                    let _ = tx.send(msg).await;
+                }
+                Err(e) => {
+                    warn!("Failed to parse UDP message: {} | Error: {}", data.trim(), e);
+                }
             }
         }
     }
@@ -95,8 +101,14 @@ impl IngestionServer {
                             let mut msg_buf = vec![0u8; len];
                             if reader.read_exact(&mut msg_buf).await.is_ok() {
                                 let data = String::from_utf8_lossy(&msg_buf);
-                                if let Ok(msg) = UnifiedParser::parse(&data) {
-                                    let _ = tx_clone.send(msg).await;
+                                debug!("TCP (Octet) received: {}", data.trim());
+                                match UnifiedParser::parse(&data) {
+                                    Ok(msg) => {
+                                        let _ = tx_clone.send(msg).await;
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to parse TCP message: {} | Error: {}", data.trim(), e);
+                                    }
                                 }
                             }
                         }
@@ -105,12 +117,17 @@ impl IngestionServer {
                         // Read until LF
                         let mut msg_bytes = vec![first_byte[0]];
                         let mut line = Vec::new();
-                        use tokio::io::AsyncBufReadExt;
                         if reader.read_until(b'\n', &mut line).await.is_ok() {
                             msg_bytes.extend(line);
                             let data = String::from_utf8_lossy(&msg_bytes);
-                            if let Ok(msg) = UnifiedParser::parse(data.trim_end()) {
-                                let _ = tx_clone.send(msg).await;
+                            debug!("TCP (Delimited) received: {}", data.trim());
+                            match UnifiedParser::parse(data.trim_end()) {
+                                Ok(msg) => {
+                                    let _ = tx_clone.send(msg).await;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to parse TCP message: {} | Error: {}", data.trim(), e);
+                                }
                             }
                         }
                     } else if first_byte[0] == b'\n' || first_byte[0] == b'\r' {
@@ -119,7 +136,6 @@ impl IngestionServer {
                     } else {
                         // Just consume the rest of the line if it's junk
                         let mut junk = Vec::new();
-                        use tokio::io::AsyncBufReadExt;
                         let _ = reader.read_until(b'\n', &mut junk).await;
                     }
                 }

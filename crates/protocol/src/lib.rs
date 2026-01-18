@@ -3,6 +3,7 @@ pub mod rfc5424;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyslogMessage {
@@ -23,6 +24,11 @@ pub struct UnifiedParser;
 
 impl UnifiedParser {
     pub fn parse(input: &str) -> anyhow::Result<SyslogMessage> {
+        let input = input.trim();
+        if input.is_empty() {
+            return Err(anyhow::anyhow!("Empty input"));
+        }
+
         // Simple heuristic: if the char after > is a digit, it's likely RFC 5424
         let is_rfc5424 = input
             .find('>')
@@ -30,8 +36,10 @@ impl UnifiedParser {
             .is_some_and(|c| c.is_ascii_digit());
 
         if is_rfc5424 {
+            debug!("Attempting RFC 5424 parse");
             return rfc5424::RFC5424Parser::parse(input);
         }
+        debug!("Attempting RFC 3164 parse");
         rfc3164::RFC3164Parser::parse(input)
     }
 }

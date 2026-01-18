@@ -12,7 +12,7 @@ Sankshepa aims to provide a compliant, high-speed syslog infrastructure that min
     - Groups logs by token count.
     - Uses similarity clustering (threshold ≥ 0.5) to deduce templates.
     - Replaces variable parts with `<*>`.
-- **Storage Layer (`src/storage/mod.rs`)**: Columnar storage using `bincode` for serialization, delta-encoding for timestamps, and `zstd` for block compression.
+- **Storage Layer (`src/storage/mod.rs`)**: Columnar storage using `postcard` for serialization, delta-encoding for timestamps, and `zstd` for block compression.
 
 ## Coding Standards
 - **Strict Linting**: The CI enforces `cargo clippy -- -D warnings`. Avoid collapsible `if` blocks, redundant pattern matching, and complex types without aliases.

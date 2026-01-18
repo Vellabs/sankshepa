@@ -1,0 +1,16 @@
+[package]
+name = "sankshepa-storage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sankshepa-protocol.workspace = true
+chrono.workspace = true
+serde.workspace = true
+zstd.workspace = true
+postcard.workspace = true
+byteorder.workspace = true
+bitvec.workspace = true
+strsim.workspace = true
+anyhow.workspace = true
+tracing.workspace = true

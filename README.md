@@ -4,8 +4,17 @@ A high-performance Syslog Collector and Generator with **LogShrink** storage for
 
 ## Key Features
 - **Multi-Protocol**: Supports RFC 3164 (BSD), RFC 5424 (Structured), and RFC 6587 (TCP Framing).
+- **Realtime Dashboard**: Built-in Axum-based web UI with SSE (Server-Sent Events) for live log monitoring.
 - **LogShrink Storage**: Deduplicates logs by extracting static templates and dynamic variables into a columnar binary format (`.lshrink`).
-- **Efficient Compression**: Uses Delta-encoding for timestamps and Zstd for columnar blocks, achieving 2x-5x better compression than Gzip.
+- **Modular Architecture**: Organized as a Rust workspace with clean separation between Protocol, Storage, Ingestion, and UI.
+- **Efficient Compression**: Uses Delta-encoding for timestamps and Zstd for columnar blocks.
+
+## Project Structure
+- `crates/protocol`: High-performance `nom` parsers for syslog.
+- `crates/storage`: LogShrink deduplication and columnar storage engine.
+- `crates/ingestion`: Async TCP/UDP/BEEP network listeners.
+- `crates/ui`: Web server and SSE-based log dashboard.
+- `src/`: Main CLI entry point.
 
 ## How it Works
 1. **Ingestion**: Asynchronous listeners for UDP and TCP (handles Octet Counting and Non-Transparent Framing).
@@ -22,7 +31,14 @@ cargo build --release
 
 ### Start Collector
 ```bash
+# Starts syslog listeners and the Web UI on http://127.0.0.1:8080
 ./target/release/sankshepa serve --output production.lshrink
+```
+
+### Benchmarking Storage Gains
+```bash
+# Generate 100k logs and measure compression efficiency
+./target/release/sankshepa bench --count 100000 --output bench.lshrink
 ```
 
 ### Generate Test Logs

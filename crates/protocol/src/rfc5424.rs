@@ -1,4 +1,4 @@
-use crate::protocol::SyslogMessage;
+use crate::SyslogMessage;
 use chrono::{DateTime, Utc};
 use nom::{
     IResult,

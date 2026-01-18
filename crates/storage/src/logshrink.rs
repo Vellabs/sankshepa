@@ -1,4 +1,4 @@
-use crate::protocol::SyslogMessage;
+use sankshepa_protocol::SyslogMessage;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -179,7 +179,7 @@ impl LogChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::SyslogMessage;
+    use sankshepa_protocol::SyslogMessage;
     use chrono::Utc;
 
     fn create_msg(text: &str) -> SyslogMessage {

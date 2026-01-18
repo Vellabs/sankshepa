@@ -68,16 +68,16 @@ impl StorageEngine {
             }
         }
 
-        let ts_data = bincode::serialize(&delta_ts)?;
+        let ts_data = postcard::to_allocvec(&delta_ts)?;
         let pri_data = priorities;
-        let host_data = bincode::serialize(&hostname_ids)?;
-        let app_data = bincode::serialize(&app_name_ids)?;
-        let proc_data = bincode::serialize(&procid_ids)?;
-        let msgid_data = bincode::serialize(&msgid_ids)?;
-        let sd_data = bincode::serialize(&sd_ids)?;
-        let id_data = bincode::serialize(&ids)?;
-        let var_data = bincode::serialize(&variables)?;
-        let rfc_data = bincode::serialize(&is_rfc5424s)?;
+        let host_data = postcard::to_allocvec(&hostname_ids)?;
+        let app_data = postcard::to_allocvec(&app_name_ids)?;
+        let proc_data = postcard::to_allocvec(&procid_ids)?;
+        let msgid_data = postcard::to_allocvec(&msgid_ids)?;
+        let sd_data = postcard::to_allocvec(&sd_ids)?;
+        let id_data = postcard::to_allocvec(&ids)?;
+        let var_data = postcard::to_allocvec(&variables)?;
+        let rfc_data = postcard::to_allocvec(&is_rfc5424s)?;
 
         let compressed = CompressedChunk {
             templates,
@@ -95,7 +95,7 @@ impl StorageEngine {
         };
 
         let mut file = File::create(path)?;
-        let serialized = bincode::serialize(&compressed)?;
+        let serialized = postcard::to_allocvec(&compressed)?;
         file.write_all(&serialized)?;
 
         Ok(())
@@ -106,10 +106,10 @@ impl StorageEngine {
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
 
-        let compressed: CompressedChunk = bincode::deserialize(&buf)?;
+        let compressed: CompressedChunk = postcard::from_bytes(&buf)?;
 
         let ts_data = decode_all(&compressed.timestamp_block[..])?;
-        let delta_ts: Vec<i64> = bincode::deserialize(&ts_data)?;
+        let delta_ts: Vec<i64> = postcard::from_bytes(&ts_data)?;
 
         let mut timestamps = Vec::new();
         if !delta_ts.is_empty() {
@@ -124,28 +124,28 @@ impl StorageEngine {
         let priorities = decode_all(&compressed.priority_block[..])?;
 
         let host_data = decode_all(&compressed.hostname_id_block[..])?;
-        let hostname_ids: Vec<Option<u32>> = bincode::deserialize(&host_data)?;
+        let hostname_ids: Vec<Option<u32>> = postcard::from_bytes(&host_data)?;
 
         let app_data = decode_all(&compressed.app_name_id_block[..])?;
-        let app_name_ids: Vec<Option<u32>> = bincode::deserialize(&app_data)?;
+        let app_name_ids: Vec<Option<u32>> = postcard::from_bytes(&app_data)?;
 
         let proc_data = decode_all(&compressed.procid_id_block[..])?;
-        let procid_ids: Vec<Option<u32>> = bincode::deserialize(&proc_data)?;
+        let procid_ids: Vec<Option<u32>> = postcard::from_bytes(&proc_data)?;
 
         let msgid_data = decode_all(&compressed.msgid_id_block[..])?;
-        let msgid_ids: Vec<Option<u32>> = bincode::deserialize(&msgid_data)?;
+        let msgid_ids: Vec<Option<u32>> = postcard::from_bytes(&msgid_data)?;
 
         let sd_data = decode_all(&compressed.sd_id_block[..])?;
-        let sd_ids: Vec<Option<u32>> = bincode::deserialize(&sd_data)?;
+        let sd_ids: Vec<Option<u32>> = postcard::from_bytes(&sd_data)?;
 
         let id_data = decode_all(&compressed.template_id_block[..])?;
-        let ids: Vec<u32> = bincode::deserialize(&id_data)?;
+        let ids: Vec<u32> = postcard::from_bytes(&id_data)?;
 
         let var_data = decode_all(&compressed.variable_block[..])?;
-        let variables: Vec<Vec<String>> = bincode::deserialize(&var_data)?;
+        let variables: Vec<Vec<String>> = postcard::from_bytes(&var_data)?;
 
         let rfc_data = decode_all(&compressed.is_rfc5424_block[..])?;
-        let is_rfc5424s: Vec<bool> = bincode::deserialize(&rfc_data)?;
+        let is_rfc5424s: Vec<bool> = postcard::from_bytes(&rfc_data)?;
 
         let mut chunk = LogChunk::new();
         chunk.string_pool = compressed.string_pool;
@@ -176,8 +176,8 @@ impl StorageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::SyslogMessage;
-    use crate::storage::logshrink::LogChunk;
+    use sankshepa_protocol::SyslogMessage;
+    use crate::logshrink::LogChunk;
     use chrono::Utc;
     use std::fs;
 
