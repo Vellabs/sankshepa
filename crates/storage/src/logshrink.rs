@@ -1,7 +1,7 @@
 use chrono::Utc;
 use sankshepa_protocol::SyslogMessage;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
@@ -21,6 +21,7 @@ pub struct LogRecord {
     pub template_id: u32,
     pub variables: Vec<String>,
     pub is_rfc5424: bool,
+    pub node_id_id: Option<u32>,
 }
 
 pub struct LogChunk {
@@ -68,9 +69,20 @@ impl LogChunk {
         self.raw_messages.push(msg);
     }
 
-    pub fn finish_and_process(&mut self) {
+    pub fn import_template(&mut self, pattern: String) {
+        if !self.templates.contains_key(&pattern) {
+            let id = self.next_template_id;
+            self.templates.insert(pattern, id);
+            self.next_template_id += 1;
+        }
+    }
+
+    pub fn finish_and_process(&mut self) -> Vec<String> {
+        let mut new_templates = Vec::new();
+        let old_templates: HashSet<String> = self.templates.keys().cloned().collect();
+
         if self.raw_messages.is_empty() {
-            return;
+            return new_templates;
         }
 
         let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -88,7 +100,14 @@ impl LogChunk {
             }
         }
 
+        for pattern in self.templates.keys() {
+            if !old_templates.contains(pattern) {
+                new_templates.push(pattern.clone());
+            }
+        }
+
         self.raw_messages.clear();
+        new_templates
     }
 
     fn process_group(&mut self, indices: &[usize]) {
@@ -140,6 +159,7 @@ impl LogChunk {
                 let procid_id = self.intern_string(msg.procid);
                 let msgid_id = self.intern_string(msg.msgid);
                 let structured_data_id = self.intern_string(msg.structured_data);
+                let node_id_id = self.intern_string(msg.node_id);
 
                 self.records.push(LogRecord {
                     timestamp: msg.timestamp.unwrap_or_else(Utc::now).timestamp_millis(),
@@ -152,6 +172,7 @@ impl LogChunk {
                     template_id,
                     variables,
                     is_rfc5424: msg.is_rfc5424,
+                    node_id_id,
                 });
             }
         }

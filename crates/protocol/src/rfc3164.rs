@@ -31,6 +31,7 @@ impl RFC3164Parser {
             structured_data: None,
             message: msg.to_string(),
             is_rfc5424: false,
+            node_id: None,
         })
     }
 }

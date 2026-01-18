@@ -31,6 +31,7 @@ impl RFC5424Parser {
             structured_data: sd,
             message: msg.to_string(),
             is_rfc5424: true,
+            node_id: None,
         })
     }
 }

@@ -24,6 +24,8 @@ async fn test_full_pipeline_udp() {
             "127.0.0.1:12601",
             "--ui-addr",
             "127.0.0.1:12080",
+            "--cluster-addr",
+            "127.0.0.1:12701",
             "--output",
             output_file,
         ])
@@ -102,6 +104,8 @@ async fn test_full_pipeline_tcp() {
             "127.0.0.1:13601",
             "--ui-addr",
             "127.0.0.1:13080",
+            "--cluster-addr",
+            "127.0.0.1:13701",
             "--output",
             output_file,
         ])

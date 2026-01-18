@@ -1,0 +1,15 @@
+[package]
+name = "sankshepa-cluster"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+sankshepa-protocol.workspace = true
+sankshepa-storage.workspace = true
+byteorder.workspace = true

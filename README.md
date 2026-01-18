@@ -35,6 +35,17 @@ cargo build --release
 ./target/release/sankshepa serve --output production.lshrink
 ```
 
+### High Availability Cluster
+Sankshepa supports AP (Available / Partition-tolerant) clustering to synchronize log templates across multiple nodes.
+
+```bash
+# Node 1
+./target/release/sankshepa serve --node-id node-1 --cluster-addr 127.0.0.1:1701 --output node1.lshrink
+
+# Node 2 (connecting to Node 1)
+./target/release/sankshepa serve --node-id node-2 --cluster-addr 127.0.0.1:1702 --peers 127.0.0.1:1701 --output node2.lshrink
+```
+
 ### Benchmarking Storage Gains
 ```bash
 # Generate 100k logs and measure compression efficiency

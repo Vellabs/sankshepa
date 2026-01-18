@@ -18,6 +18,7 @@ pub struct SyslogMessage {
     pub structured_data: Option<String>,
     pub message: String,
     pub is_rfc5424: bool,
+    pub node_id: Option<String>,
 }
 
 pub struct UnifiedParser;

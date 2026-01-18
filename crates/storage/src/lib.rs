@@ -20,6 +20,7 @@ pub struct CompressedChunk {
     pub template_id_block: Vec<u8>,
     pub variable_block: Vec<u8>,
     pub is_rfc5424_block: Vec<u8>,
+    pub node_id_id_block: Vec<u8>,
 }
 
 pub struct StorageEngine;
@@ -45,6 +46,7 @@ impl StorageEngine {
         let mut ids = Vec::new();
         let mut variables = Vec::new();
         let mut is_rfc5424s = Vec::new();
+        let mut node_id_ids = Vec::new();
 
         for record in chunk.records {
             timestamps.push(record.timestamp);
@@ -57,6 +59,7 @@ impl StorageEngine {
             ids.push(record.template_id);
             variables.push(record.variables);
             is_rfc5424s.push(record.is_rfc5424);
+            node_id_ids.push(record.node_id_id);
         }
 
         // Delta encoding for timestamps
@@ -78,6 +81,7 @@ impl StorageEngine {
         let id_data = postcard::to_allocvec(&ids)?;
         let var_data = postcard::to_allocvec(&variables)?;
         let rfc_data = postcard::to_allocvec(&is_rfc5424s)?;
+        let node_id_data = postcard::to_allocvec(&node_id_ids)?;
 
         let compressed = CompressedChunk {
             templates,
@@ -92,6 +96,7 @@ impl StorageEngine {
             template_id_block: encode_all(&id_data[..], 3)?,
             variable_block: encode_all(&var_data[..], 3)?,
             is_rfc5424_block: encode_all(&rfc_data[..], 3)?,
+            node_id_id_block: encode_all(&node_id_data[..], 3)?,
         };
 
         let mut file = File::create(path)?;
@@ -147,6 +152,9 @@ impl StorageEngine {
         let rfc_data = decode_all(&compressed.is_rfc5424_block[..])?;
         let is_rfc5424s: Vec<bool> = postcard::from_bytes(&rfc_data)?;
 
+        let node_id_data = decode_all(&compressed.node_id_id_block[..])?;
+        let node_id_ids: Vec<Option<u32>> = postcard::from_bytes(&node_id_data)?;
+
         let mut chunk = LogChunk::new();
         chunk.string_pool = compressed.string_pool;
         for t in compressed.templates {
@@ -166,6 +174,7 @@ impl StorageEngine {
                 template_id: ids[i],
                 variables: variables[i].clone(),
                 is_rfc5424: is_rfc5424s[i],
+                node_id_id: node_id_ids[i],
             });
         }
 

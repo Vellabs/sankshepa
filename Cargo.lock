@@ -839,6 +839,7 @@ dependencies = [
  "chrono",
  "clap",
  "nix",
+ "sankshepa-cluster",
  "sankshepa-ingestion",
  "sankshepa-protocol",
  "sankshepa-storage",
@@ -846,6 +847,21 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "sankshepa-cluster"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "chrono",
+ "sankshepa-protocol",
+ "sankshepa-storage",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

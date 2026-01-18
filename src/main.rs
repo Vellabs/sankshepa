@@ -1,11 +1,13 @@
 use chrono::{TimeZone, Utc};
 use clap::{Parser, Subcommand};
+use sankshepa_cluster::ClusterManager;
 use sankshepa_ingestion::IngestionServer;
 use sankshepa_protocol::UnifiedParser;
 use sankshepa_storage::StorageEngine;
 use sankshepa_storage::logshrink::LogChunk;
 use sankshepa_ui::UiServer;
 use std::io::{self, Write};
+use std::net::SocketAddr;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
@@ -32,6 +34,15 @@ enum Commands {
         ui_addr: String,
         #[arg(long, default_value = "logs.lshrink")]
         output: String,
+        /// Unique node identifier
+        #[arg(long)]
+        node_id: Option<String>,
+        /// Cluster management address (UDP)
+        #[arg(long, default_value = "127.0.0.1:1701")]
+        cluster_addr: String,
+        /// Initial peer addresses
+        #[arg(long)]
+        peers: Vec<String>,
     },
     /// Extracts and reconstructs logs from LogShrink storage
     Query {
@@ -76,31 +87,53 @@ async fn main() -> anyhow::Result<()> {
             beep_addr,
             ui_addr,
             output,
+            node_id,
+            cluster_addr,
+            peers,
         } => {
             let (tx, mut rx) = mpsc::channel(100);
             let (ui_tx, _) = broadcast::channel(1000);
+            let (cluster_template_tx, mut cluster_template_rx) = broadcast::channel(100);
 
             let server = IngestionServer::new(udp_addr, tcp_addr, beep_addr, tx);
             let ui_server = UiServer::new(ui_tx.clone());
+            let node_id = node_id.unwrap_or_else(|| format!("node-{}", std::process::id()));
+            let cluster_socket_addr: SocketAddr = cluster_addr.parse()?;
+            let peer_addrs: Vec<SocketAddr> = peers.iter().filter_map(|p| p.parse().ok()).collect();
+            let cluster_manager = ClusterManager::new(
+                node_id.clone(),
+                cluster_socket_addr,
+                peer_addrs,
+                cluster_template_tx.clone(),
+            );
 
+            let cluster_tx = cluster_manager.template_tx.clone();
             let output_path = output.clone();
             let ui_tx_clone = ui_tx.clone();
             let storage_handle = tokio::spawn(async move {
                 let mut chunk = LogChunk::new();
                 let mut count = 0;
+                let node_id_for_logs = node_id.clone();
                 loop {
                     tokio::select! {
-                        Some(msg) = rx.recv() => {
+                        Some(mut msg) = rx.recv() => {
+                            msg.node_id = Some(node_id_for_logs.clone());
                             let _ = ui_tx_clone.send(msg.clone());
                             chunk.add_message(msg);
                             count += 1;
                             if count >= 10 {
-                                chunk.finish_and_process();
+                                let new_templates = chunk.finish_and_process();
+                                for t in new_templates {
+                                    let _ = cluster_tx.send(t).await;
+                                }
                                 let _ = StorageEngine::save_chunk(chunk, &output_path);
                                 chunk = LogChunk::new();
                                 count = 0;
                                 info!("Saved chunk to {}", output_path);
                             }
+                        }
+                        Ok(pattern) = cluster_template_rx.recv() => {
+                            chunk.import_template(pattern);
                         }
                         _ = tokio::signal::ctrl_c() => {
                             if count > 0 {
@@ -115,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
             });
 
             let ui_handle = tokio::spawn(async move { ui_server.run(&ui_addr).await });
+            let cluster_handle = tokio::spawn(async move { cluster_manager.run().await });
 
             tokio::select! {
                 res = server.run() => {
@@ -127,6 +161,13 @@ async fn main() -> anyhow::Result<()> {
                         Ok(Ok(_)) => info!("UI server stopped"),
                         Ok(Err(e)) => error!("UI server error: {}", e),
                         Err(e) => error!("UI task panicked: {}", e),
+                    }
+                }
+                res = cluster_handle => {
+                    match res {
+                        Ok(Ok(_)) => info!("Cluster manager stopped"),
+                        Ok(Err(e)) => error!("Cluster manager error: {}", e),
+                        Err(e) => error!("Cluster task panicked: {}", e),
                     }
                 }
                 _ = storage_handle => {
@@ -192,11 +233,16 @@ async fn main() -> anyhow::Result<()> {
                     .and_then(|id| chunk.string_pool.get(id as usize))
                     .map(|s| s.as_str())
                     .unwrap_or("-");
+                let node = record
+                    .node_id_id
+                    .and_then(|id| chunk.string_pool.get(id as usize))
+                    .map(|s| s.as_str())
+                    .unwrap_or("-");
 
                 if let Some(f) = &filter_lower {
                     let hay = format!(
-                        "{} {} {} {} {} {} {}",
-                        host, app, proc, msgid, sd, reconstructed, record.priority
+                        "{} {} {} {} {} {} {} {}",
+                        host, app, proc, msgid, sd, reconstructed, record.priority, node
                     )
                     .to_lowercase();
                     if !hay.contains(f) {
@@ -208,7 +254,8 @@ async fn main() -> anyhow::Result<()> {
                     let res = if record.is_rfc5424 {
                         writeln!(
                             stdout,
-                            "<{}>1 {} {} {} {} {} [{}] {}",
+                            "[{}] <{}>1 {} {} {} {} {} [{}] {}",
+                            node,
                             record.priority,
                             dt.to_rfc3339(),
                             host,
@@ -222,7 +269,8 @@ async fn main() -> anyhow::Result<()> {
                         // RFC 3164
                         writeln!(
                             stdout,
-                            "<{}>{} {} {}",
+                            "[{}] <{}>{} {} {}",
+                            node,
                             record.priority,
                             dt.format("%b %d %H:%M:%S"),
                             host,

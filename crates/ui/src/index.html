@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,14 +15,16 @@
             flex-direction: column;
             height: 100vh;
         }
+
         header {
             background-color: #333;
             padding: 10px 20px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
+
         #log-container {
             flex-grow: 1;
             overflow-y: auto;
@@ -29,6 +32,7 @@
             font-family: 'Cascadia Code', 'Courier New', Courier, monospace;
             font-size: 0.9em;
         }
+
         .log-entry {
             margin-bottom: 5px;
             border-bottom: 1px solid #333;
@@ -36,27 +40,96 @@
             display: flex;
             gap: 10px;
         }
-        .ts { color: #569cd6; min-width: 180px; }
-        .host { color: #ce9178; min-width: 100px; }
-        .app { color: #4ec9b0; min-width: 80px; }
-        .msg { color: #d4d4d4; }
-        .severity { padding: 2px 5px; border-radius: 3px; font-size: 0.8em; text-transform: uppercase; }
-        .sev-0 { background-color: #c41e3a; color: white; } /* emergency */
-        .sev-1 { background-color: #ff0000; color: white; } /* alert */
-        .sev-2 { background-color: #ff4500; color: white; } /* critical */
-        .sev-3 { background-color: #ffa500; color: black; } /* error */
-        .sev-4 { background-color: #ffff00; color: black; } /* warning */
-        .sev-5 { background-color: #0000ff; color: white; } /* notice */
-        .sev-6 { background-color: #00ff00; color: black; } /* info */
-        .sev-7 { background-color: #808080; color: white; } /* debug */
+
+        .ts {
+            color: #569cd6;
+            min-width: 180px;
+        }
+
+        .node {
+            color: #dcdcaa;
+            min-width: 100px;
+            font-weight: bold;
+        }
+
+        .host {
+            color: #ce9178;
+            min-width: 100px;
+        }
+
+        .app {
+            color: #4ec9b0;
+            min-width: 80px;
+        }
+
+        .msg {
+            color: #d4d4d4;
+        }
+
+        .severity {
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            text-transform: uppercase;
+        }
+
+        .sev-0 {
+            background-color: #c41e3a;
+            color: white;
+        }
+
+        /* emergency */
+        .sev-1 {
+            background-color: #ff0000;
+            color: white;
+        }
+
+        /* alert */
+        .sev-2 {
+            background-color: #ff4500;
+            color: white;
+        }
+
+        /* critical */
+        .sev-3 {
+            background-color: #ffa500;
+            color: black;
+        }
+
+        /* error */
+        .sev-4 {
+            background-color: #ffff00;
+            color: black;
+        }
+
+        /* warning */
+        .sev-5 {
+            background-color: #0000ff;
+            color: white;
+        }
+
+        /* notice */
+        .sev-6 {
+            background-color: #00ff00;
+            color: black;
+        }
+
+        /* info */
+        .sev-7 {
+            background-color: #808080;
+            color: white;
+        }
+
+        /* debug */
     </style>
 </head>
+
 <body>
     <header>
         <div>Sankshepa Realtime Logs</div>
         <div style="flex-grow: 1; margin: 0 40px; display: flex; align-items: center; gap: 10px;">
-            <input type="text" id="filter-input" placeholder="Search logs..." 
-                   style="width: 100%; padding: 5px 10px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff;">
+            <input type="text" id="filter-input" placeholder="Search logs..."
+                style="width: 100%; padding: 5px 10px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff;">
             <label style="font-size: 0.8em; white-space: nowrap;">
                 <input type="checkbox" id="auto-scroll" checked> Auto-Scroll
             </label>
@@ -103,6 +176,10 @@
             ts.className = 'ts';
             ts.textContent = msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '-';
 
+            const node = document.createElement('span');
+            node.className = 'node';
+            node.textContent = msg.node_id || '-';
+
             const sev = document.createElement('span');
             sev.className = `severity sev-${msg.severity}`;
             sev.textContent = getSeverityName(msg.severity);
@@ -120,6 +197,7 @@
             text.textContent = msg.message;
 
             entry.appendChild(ts);
+            entry.appendChild(node);
             entry.appendChild(sev);
             entry.appendChild(host);
             entry.appendChild(app);
@@ -149,4 +227,5 @@
         }
     </script>
 </body>
+
 </html>

@@ -5,6 +5,7 @@ members = [
     "crates/storage",
     "crates/ingestion",
     "crates/ui",
+    "crates/cluster",
 ]
 resolver = "2"
 
@@ -48,6 +49,7 @@ tracing-subscriber.workspace = true
 
 sankshepa-protocol.workspace = true
 sankshepa-storage.workspace = true
+sankshepa-cluster = { path = "crates/cluster" }
 sankshepa-ingestion.workspace = true
 sankshepa-ui.workspace = true
 
