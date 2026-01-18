@@ -176,9 +176,9 @@ impl StorageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sankshepa_protocol::SyslogMessage;
     use crate::logshrink::LogChunk;
     use chrono::Utc;
+    use sankshepa_protocol::SyslogMessage;
     use std::fs;
 
     #[test]

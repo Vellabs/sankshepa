@@ -2,7 +2,7 @@ use sankshepa_protocol::{SyslogMessage, UnifiedParser};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 pub struct IngestionServer {
     udp_addr: String,
@@ -59,7 +59,11 @@ impl IngestionServer {
                     let _ = tx.send(msg).await;
                 }
                 Err(e) => {
-                    warn!("Failed to parse UDP message: {} | Error: {}", data.trim(), e);
+                    warn!(
+                        "Failed to parse UDP message: {} | Error: {}",
+                        data.trim(),
+                        e
+                    );
                 }
             }
         }
@@ -107,7 +111,11 @@ impl IngestionServer {
                                         let _ = tx_clone.send(msg).await;
                                     }
                                     Err(e) => {
-                                        warn!("Failed to parse TCP message: {} | Error: {}", data.trim(), e);
+                                        warn!(
+                                            "Failed to parse TCP message: {} | Error: {}",
+                                            data.trim(),
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -126,7 +134,11 @@ impl IngestionServer {
                                     let _ = tx_clone.send(msg).await;
                                 }
                                 Err(e) => {
-                                    warn!("Failed to parse TCP message: {} | Error: {}", data.trim(), e);
+                                    warn!(
+                                        "Failed to parse TCP message: {} | Error: {}",
+                                        data.trim(),
+                                        e
+                                    );
                                 }
                             }
                         }

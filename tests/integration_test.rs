@@ -14,7 +14,7 @@ async fn test_full_pipeline_udp() {
 
     // 1. Start sankshepa serve
     let mut serve_child = Command::new(binary_path)
-        .args(&[
+        .args([
             "serve",
             "--udp-addr",
             "127.0.0.1:12514",
@@ -34,7 +34,7 @@ async fn test_full_pipeline_udp() {
 
     // 2. Run sankshepa generate
     let gen_status = Command::new(binary_path)
-        .args(&[
+        .args([
             "generate",
             "--addr",
             "127.0.0.1:12514",
@@ -68,7 +68,7 @@ async fn test_full_pipeline_udp() {
 
     // 5. Run query
     let query_output = Command::new(binary_path)
-        .args(&["query", "--input", output_file])
+        .args(["query", "--input", output_file])
         .output()
         .expect("Failed to run query");
 
@@ -92,7 +92,7 @@ async fn test_full_pipeline_tcp() {
 
     // 1. Start sankshepa serve
     let mut serve_child = Command::new(binary_path)
-        .args(&[
+        .args([
             "serve",
             "--udp-addr",
             "127.0.0.1:13514",
@@ -112,7 +112,7 @@ async fn test_full_pipeline_tcp() {
 
     // 2. Run sankshepa generate
     let gen_status = Command::new(binary_path)
-        .args(&[
+        .args([
             "generate",
             "--addr",
             "127.0.0.1:13515",
@@ -142,7 +142,7 @@ async fn test_full_pipeline_tcp() {
 
     // 5. Run query
     let query_output = Command::new(binary_path)
-        .args(&["query", "--input", output_file])
+        .args(["query", "--input", output_file])
         .output()
         .expect("Failed to run query");
 

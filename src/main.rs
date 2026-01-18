@@ -4,11 +4,11 @@ use sankshepa_ingestion::IngestionServer;
 use sankshepa_protocol::UnifiedParser;
 use sankshepa_storage::StorageEngine;
 use sankshepa_storage::logshrink::LogChunk;
+use sankshepa_ui::UiServer;
 use std::io::{self, Write};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{mpsc, broadcast};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
-use sankshepa_ui::UiServer;
 
 #[derive(Parser)]
 #[command(name = "sankshepa")]
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let (tx, mut rx) = mpsc::channel(100);
             let (ui_tx, _) = broadcast::channel(1000);
-            
+
             let server = IngestionServer::new(udp_addr, tcp_addr, beep_addr, tx);
             let ui_server = UiServer::new(ui_tx.clone());
 
@@ -114,9 +114,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             });
 
-            let ui_handle = tokio::spawn(async move {
-                ui_server.run(&ui_addr).await
-            });
+            let ui_handle = tokio::spawn(async move { ui_server.run(&ui_addr).await });
 
             tokio::select! {
                 res = server.run() => {
@@ -196,7 +194,11 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or("-");
 
                 if let Some(f) = &filter_lower {
-                    let hay = format!("{} {} {} {} {} {} {}", host, app, proc, msgid, sd, reconstructed, record.priority).to_lowercase();
+                    let hay = format!(
+                        "{} {} {} {} {} {} {}",
+                        host, app, proc, msgid, sd, reconstructed, record.priority
+                    )
+                    .to_lowercase();
                     if !hay.contains(f) {
                         continue;
                     }
@@ -300,14 +302,23 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let compressed_size = std::fs::metadata(&output)?.len();
-            
+
             println!("\nBenchmark Results:");
             println!("------------------");
             println!("Log Count:        {}", count);
             println!("Raw Text Size:    {:.2} MB", raw_size as f64 / 1_048_576.0);
-            println!("LogShrink Size:   {:.2} MB", compressed_size as f64 / 1_048_576.0);
-            println!("Reduction Ratio:  {:.2}x", raw_size as f64 / compressed_size as f64);
-            println!("Space Savings:    {:.1}%", (1.0 - (compressed_size as f64 / raw_size as f64)) * 100.0);
+            println!(
+                "LogShrink Size:   {:.2} MB",
+                compressed_size as f64 / 1_048_576.0
+            );
+            println!(
+                "Reduction Ratio:  {:.2}x",
+                raw_size as f64 / compressed_size as f64
+            );
+            println!(
+                "Space Savings:    {:.1}%",
+                (1.0 - (compressed_size as f64 / raw_size as f64)) * 100.0
+            );
             println!("Chunks Saved:     {}", total_chunks_saved);
         }
     }

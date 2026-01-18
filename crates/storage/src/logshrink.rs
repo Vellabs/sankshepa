@@ -1,5 +1,5 @@
-use sankshepa_protocol::SyslogMessage;
 use chrono::Utc;
+use sankshepa_protocol::SyslogMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -34,6 +34,12 @@ pub struct LogChunk {
 
 impl LogChunk {
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for LogChunk {
+    fn default() -> Self {
         Self {
             raw_messages: Vec::with_capacity(10),
             templates: HashMap::new(),
@@ -43,7 +49,9 @@ impl LogChunk {
             next_template_id: 0,
         }
     }
+}
 
+impl LogChunk {
     fn intern_string(&mut self, s: Option<String>) -> Option<u32> {
         let s = s?;
         if let Some(&id) = self.string_map.get(&s) {
@@ -179,8 +187,8 @@ impl LogChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sankshepa_protocol::SyslogMessage;
     use chrono::Utc;
+    use sankshepa_protocol::SyslogMessage;
 
     fn create_msg(text: &str) -> SyslogMessage {
         SyslogMessage {

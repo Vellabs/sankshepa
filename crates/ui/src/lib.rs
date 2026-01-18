@@ -1,15 +1,15 @@
 use axum::{
+    Router,
     extract::State,
     response::sse::{Event, Sse},
     routing::get,
-    Router,
 };
 use futures_util::stream::Stream;
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt as _;
-use std::convert::Infallible;
 use sankshepa_protocol::SyslogMessage;
+use std::convert::Infallible;
+use tokio::sync::broadcast;
+use tokio_stream::StreamExt as _;
+use tokio_stream::wrappers::BroadcastStream;
 use tracing::info;
 
 pub struct UiServer {
@@ -43,14 +43,12 @@ async fn sse_handler(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     info!("New SSE subscriber connected");
     let rx = tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| {
-        match msg {
-            Ok(m) => {
-                let json = serde_json::to_string(&m).ok()?;
-                Some(Ok(Event::default().data(json)))
-            }
-            Err(_) => None,
+    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
+        Ok(m) => {
+            let json = serde_json::to_string(&m).ok()?;
+            Some(Ok(Event::default().data(json)))
         }
+        Err(_) => None,
     });
 
     Sse::new(stream)
