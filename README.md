@@ -1,5 +1,9 @@
 # Sankshepa
 
+![CI Status](https://github.com/sourcepirate/sankshepa/actions/workflows/ci.yml/badge.svg)
+![Rust Version](https://img.shields.io/badge/rust-2024-orange.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
 A high-performance Syslog Collector and Generator with **LogShrink** storage for maximum compression.
 
 ## Key Features
