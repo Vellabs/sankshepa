@@ -13,3 +13,5 @@ chrono.workspace = true
 sankshepa-protocol.workspace = true
 sankshepa-storage.workspace = true
 byteorder.workspace = true
+postcard.workspace = true
+
