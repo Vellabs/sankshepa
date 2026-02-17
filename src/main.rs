@@ -22,13 +22,13 @@ struct Cli {
 enum Commands {
     /// Starts the syslog collector
     Serve {
-        #[arg(long, default_value = "0.0.0.0:1514")]
+        #[arg(long, default_value = "127.0.0.1:1514")]
         udp_addr: String,
-        #[arg(long, default_value = "0.0.0.0:1514")]
+        #[arg(long, default_value = "127.0.0.1:1514")]
         tcp_addr: String,
-        #[arg(long, default_value = "0.0.0.0:1601")]
+        #[arg(long, default_value = "127.0.0.1:1601")]
         beep_addr: String,
-        #[arg(long, default_value = "0.0.0.0:8080")]
+        #[arg(long, default_value = "127.0.0.1:8080")]
         ui_addr: String,
         #[arg(long, default_value = "logs.lshrink")]
         output: String,
@@ -36,7 +36,7 @@ enum Commands {
         #[arg(long)]
         node_id: Option<String>,
         /// Cluster management address (UDP)
-        #[arg(long, default_value = "0.0.0.0:1701")]
+        #[arg(long, default_value = "127.0.0.1:1701")]
         cluster_addr: String,
         /// Initial peer addresses
         #[arg(long)]
@@ -159,7 +159,7 @@ fn query_logs(input: &str, template_id: Option<u32>, filter: Option<&str>) -> an
     let mut stdout = io::stdout().lock();
 
     for path in paths {
-        let chunk = match StorageEngine::load_chunk(path.to_str().unwrap()) {
+        let chunk = match StorageEngine::load_chunk(&path) {
             Ok(c) => c,
             Err(e) => {
                 error!("Failed to load chunk at {:?}: {}", path, e);

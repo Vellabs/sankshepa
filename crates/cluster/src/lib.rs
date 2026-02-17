@@ -125,14 +125,35 @@ impl ClusterManager {
         ext_template_tx: broadcast::Sender<(u32, String)>,
         ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
         config: GossipConfig,
-        _log_path: Option<String>,
+        log_path: Option<String>,
     ) -> Self {
-        let (gossip_manager, template_rx) = GossipManager::new(
-            node_id.clone(),
-            config,
-            ext_template_tx.clone(),
-            ext_log_tx.clone(),
-        );
+        let (gossip_manager, template_rx) = if let Some(path) = log_path {
+            match GossipManager::with_persistence(
+                node_id.clone(),
+                config.clone(),
+                ext_log_tx.clone(),
+                ext_template_tx.clone(),
+                &path,
+            ) {
+                Ok(gm) => gm,
+                Err(e) => {
+                    warn!("Failed to enable persistence at {}: {}. Falling back to non-persistent mode.", path, e);
+                    GossipManager::new(
+                        node_id.clone(),
+                        config,
+                        ext_template_tx.clone(),
+                        ext_log_tx.clone(),
+                    )
+                }
+            }
+        } else {
+            GossipManager::new(
+                node_id.clone(),
+                config,
+                ext_template_tx.clone(),
+                ext_log_tx.clone(),
+            )
+        };
 
         let (log_sender, log_receiver) = mpsc::channel(100);
 

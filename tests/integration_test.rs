@@ -3,10 +3,15 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// Helper function to get the path to the sankshepa binary
+fn get_binary_path() -> &'static str {
+    env!("CARGO_BIN_EXE_sankshepa")
+}
+
 #[tokio::test]
 async fn test_full_pipeline_udp() {
     let output_file = "test_output_udp.lshrink";
-    let binary_path = "target/debug/sankshepa";
+    let binary_path = get_binary_path();
 
     if fs::metadata(output_file).is_ok() {
         let _ = fs::remove_file(output_file);
@@ -86,7 +91,7 @@ async fn test_full_pipeline_udp() {
 #[tokio::test]
 async fn test_full_pipeline_tcp() {
     let output_file = "test_output_tcp.lshrink";
-    let binary_path = "target/debug/sankshepa";
+    let binary_path = get_binary_path();
 
     if fs::metadata(output_file).is_ok() {
         let _ = fs::remove_file(output_file);
@@ -162,7 +167,7 @@ async fn test_full_pipeline_tcp() {
 #[tokio::test]
 async fn test_custom_log_files() {
     let output_dir = "test_custom_logs_dir";
-    let binary_path = "target/debug/sankshepa";
+    let binary_path = get_binary_path();
 
     if fs::metadata(output_dir).is_ok() {
         let _ = fs::remove_dir_all(output_dir);
