@@ -93,9 +93,11 @@ pub struct GossipManager {
     /// Peer vector clocks
     peer_clocks: Arc<RwLock<HashMap<String, VectorClock>>>,
     /// Template notification sender
-    template_tx: mpsc::Sender<String>,
+    template_tx: mpsc::Sender<(String, tokio::sync::oneshot::Sender<u32>)>,
     /// External broadcast for new templates
-    ext_template_tx: broadcast::Sender<String>,
+    ext_template_tx: broadcast::Sender<(u32, String)>,
+    /// External broadcast for incoming logs (template_id, variables, timestamp)
+    ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
 }
 
 impl GossipManager {
@@ -103,8 +105,12 @@ impl GossipManager {
     pub fn new(
         node_id: String,
         config: GossipConfig,
-        ext_template_tx: broadcast::Sender<String>,
-    ) -> (Self, mpsc::Receiver<String>) {
+        ext_template_tx: broadcast::Sender<(u32, String)>,
+        ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
+    ) -> (
+        Self,
+        mpsc::Receiver<(String, tokio::sync::oneshot::Sender<u32>)>,
+    ) {
         let (template_tx, template_rx) = mpsc::channel(100);
         let log = Arc::new(RwLock::new(ReplicationLog::new(node_id.clone())));
         let template_store = Arc::new(RwLock::new(CRDTTemplateStore::new(node_id.clone())));
@@ -123,6 +129,7 @@ impl GossipManager {
                 peers: Arc::new(RwLock::new(HashMap::new())),
                 peer_clocks: Arc::new(RwLock::new(HashMap::new())),
                 template_tx,
+                ext_log_tx,
                 ext_template_tx,
             },
             template_rx,
@@ -133,13 +140,18 @@ impl GossipManager {
     pub fn with_persistence(
         node_id: String,
         config: GossipConfig,
-        ext_template_tx: broadcast::Sender<String>,
+        ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
+        ext_template_tx: broadcast::Sender<(u32, String)>,
         log_path: &str,
-    ) -> anyhow::Result<(Self, mpsc::Receiver<String>)> {
+    ) -> anyhow::Result<(
+        Self,
+        mpsc::Receiver<(String, tokio::sync::oneshot::Sender<u32>)>,
+    )> {
         let (template_tx, template_rx) = mpsc::channel(100);
-        let log = Arc::new(RwLock::new(
-            ReplicationLog::with_persistence(node_id.clone(), log_path)?,
-        ));
+        let log = Arc::new(RwLock::new(ReplicationLog::with_persistence(
+            node_id.clone(),
+            log_path,
+        )?));
         let template_store = Arc::new(RwLock::new(CRDTTemplateStore::new(node_id.clone())));
         let anti_entropy = Arc::new(RwLock::new(AntiEntropyState::new(
             node_id.clone(),
@@ -155,6 +167,7 @@ impl GossipManager {
                 anti_entropy,
                 peers: Arc::new(RwLock::new(HashMap::new())),
                 peer_clocks: Arc::new(RwLock::new(HashMap::new())),
+                ext_log_tx,
                 template_tx,
                 ext_template_tx,
             },
@@ -163,7 +176,7 @@ impl GossipManager {
     }
 
     /// Get the template sender.
-    pub fn template_sender(&self) -> mpsc::Sender<String> {
+    pub fn template_sender(&self) -> mpsc::Sender<(String, tokio::sync::oneshot::Sender<u32>)> {
         self.template_tx.clone()
     }
 
@@ -183,20 +196,23 @@ impl GossipManager {
     }
 
     /// Add a new template locally and prepare for replication.
-    pub async fn add_template(&self, pattern: String) -> u32 {
+    pub async fn add_template(&self, pattern: String) -> (u32, LogEntry) {
         let template_id = {
             let mut store = self.template_store.write().await;
             store.add_template(pattern.clone())
         };
 
         // Create log entry
-        let _entry = {
+        let entry = {
             let mut log = self.log.write().await;
             log.append(ReplicationOp::NewTemplate {
                 pattern: pattern.clone(),
                 template_id,
             })
         };
+        // Return entries to be gossiped
+        // (In this simplified design, we let the polling loop handle it or expect this method to trigger it via side effect if we had the socket)
+        // But main loop listens to template_rx which calls this.
 
         // Update anti-entropy state
         {
@@ -205,9 +221,30 @@ impl GossipManager {
         }
 
         // Notify external listeners
-        let _ = self.ext_template_tx.send(pattern);
+        // info!("Added local template: {} -> {}", template_id, pattern);
+        let _ = self.ext_template_tx.send((template_id, pattern));
+        
+        // Also gossip this new template immediately? 
+        // Note: The caller (lib.rs template propagation task) receives the ID but doesn't have the log entry to gossip.
+        // So we rely on the caller to not do anything, but who gossips it?
+        // Ah, nobody gossips it immediately! The lib.rs just calls this and returns ID.
+        // It relies on Anti-Entropy or Polling? 
+        // WE SHOULD GOSSIP IT HERE if we had the socket, but we don't.
+        // Alternatively, since we can't gossip here, we should ensure the Pull mechanism picks it up or we redesign to allow gossiping from here.
 
-        template_id
+        (template_id, entry)
+    }
+
+    pub async fn add_logs(&self, template_id: u32, variables: Vec<String>) -> LogEntry {
+        let entry = {
+            let mut log = self.log.write().await;
+            log.append(ReplicationOp::TemplateVariables {
+                template_id,
+                variables,
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            })
+        };
+        entry
     }
 
     /// Handle incoming replication message.
@@ -287,7 +324,19 @@ impl GossipManager {
                         ae.add_template(pattern, template_id);
 
                         // Notify local listeners
-                        let _ = self.ext_template_tx.send(pattern.clone());
+                        let _ = self.ext_template_tx.send((template_id, pattern.clone()));
+                    }
+
+                    if let ReplicationOp::TemplateVariables {
+                        template_id,
+                        variables,
+                        timestamp_ms,
+                    } = &entry.operation
+                    {
+                        // info!("Gossip passing remote log to node: tid={}", template_id);
+                        let _ =
+                            self.ext_log_tx
+                                .send((*template_id, variables.clone(), *timestamp_ms));
                     }
 
                     // Gossip to other peers
@@ -323,19 +372,37 @@ impl GossipManager {
                         log.replicate(vec![entry.clone()])
                     };
 
-                    if applied > 0
-                        && let ReplicationOp::NewTemplate {
-                            ref pattern,
-                            template_id,
-                        } = entry.operation
-                    {
-                        let mut store = self.template_store.write().await;
-                        store.import_template(pattern.clone(), template_id, &entry.origin_node);
+                    if applied > 0 {
+                        match &entry.operation {
+                            ReplicationOp::NewTemplate {
+                                pattern,
+                                template_id,
+                            } => {
+                                let mut store = self.template_store.write().await;
+                                store.import_template(
+                                    pattern.clone(),
+                                    *template_id,
+                                    &entry.origin_node,
+                                );
 
-                        let mut ae = self.anti_entropy.write().await;
-                        ae.add_template(pattern, template_id);
+                                let mut ae = self.anti_entropy.write().await;
+                                ae.add_template(pattern, *template_id);
 
-                        let _ = self.ext_template_tx.send(pattern.clone());
+                                let _ = self.ext_template_tx.send((*template_id, pattern.clone()));
+                            }
+                            ReplicationOp::TemplateVariables {
+                                template_id,
+                                variables,
+                                timestamp_ms,
+                            } => {
+                                let _ = self.ext_log_tx.send((
+                                    *template_id,
+                                    variables.clone(),
+                                    *timestamp_ms,
+                                ));
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -387,7 +454,9 @@ impl GossipManager {
                     let mut ae = self.anti_entropy.write().await;
                     for template in other_store.all_templates() {
                         ae.add_template(&template.pattern, template.template_id);
-                        let _ = self.ext_template_tx.send(template.pattern.clone());
+                        let _ = self
+                            .ext_template_tx
+                            .send((template.template_id, template.pattern.clone()));
                     }
                 }
             }
@@ -421,7 +490,7 @@ impl GossipManager {
     }
 
     /// Gossip an entry to peers.
-    async fn gossip_entry(
+    pub async fn gossip_entry(
         &self,
         entry: LogEntry,
         socket: &UdpSocket,
@@ -500,8 +569,9 @@ mod tests {
     #[tokio::test]
     async fn test_gossip_manager_creation() {
         let (tx, _rx) = broadcast::channel(100);
+        let (log_tx, _log_rx) = broadcast::channel(100);
         let config = GossipConfig::default();
-        let (manager, _template_rx) = GossipManager::new("node1".to_string(), config, tx);
+        let (manager, _template_rx) = GossipManager::new("node1".to_string(), config, tx, log_tx);
 
         let heartbeat = manager.generate_heartbeat().await;
         match heartbeat {
@@ -520,10 +590,11 @@ mod tests {
     #[tokio::test]
     async fn test_add_template() {
         let (tx, _rx) = broadcast::channel(100);
+        let (log_tx, _log_rx) = broadcast::channel(100);
         let config = GossipConfig::default();
-        let (manager, _template_rx) = GossipManager::new("node1".to_string(), config, tx);
+        let (manager, _template_rx) = GossipManager::new("node1".to_string(), config, tx, log_tx);
 
-        let id = manager.add_template("Test <*>".to_string()).await;
+        let _id = manager.add_template("Test <*>".to_string()).await;
 
         let store = manager.get_template_store();
         let store_lock = store.read().await;

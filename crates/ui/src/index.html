@@ -127,6 +127,16 @@
 <body>
     <header>
         <div>Sankshepa Realtime Logs</div>
+        
+        <div id="stats-container" style="display: flex; gap: 20px; font-size: 0.9em; color: #aaa; border-left: 1px solid #555; padding-left: 15px; margin-left: 15px;">
+            <span>Logs: <strong id="stat-logs" style="color: #4ec9b0">0</strong></span>
+            <span>Vars: <strong id="stat-vars" style="color: #4ec9b0">0</strong></span>
+            <span>Tpls: <strong id="stat-tpls" style="color: #4ec9b0">0</strong></span>
+            <span style="border-left: 1px solid #444; padding-left: 20px;">Orig: <strong id="stat-size" style="color: #569cd6">0 B</strong></span>
+            <span>Comp: <strong id="stat-comp" style="color: #569cd6">0 B</strong></span>
+            <span>Ratio: <strong id="stat-ratio" style="color: #dcdcaa">1.0x</strong></span>
+        </div>
+
         <div style="flex-grow: 1; margin: 0 40px; display: flex; align-items: center; gap: 10px;">
             <input type="text" id="filter-input" placeholder="Search logs..."
                 style="width: 100%; padding: 5px 10px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff;">
@@ -143,6 +153,15 @@
         const status = document.getElementById('status');
         const filterInput = document.getElementById('filter-input');
         const autoScroll = document.getElementById('auto-scroll');
+        
+        // Stats elements
+        const statLogs = document.getElementById('stat-logs');
+        const statVars = document.getElementById('stat-vars');
+        const statTpls = document.getElementById('stat-tpls');
+        const statSize = document.getElementById('stat-size');
+        const statComp = document.getElementById('stat-comp');
+        const statRatio = document.getElementById('stat-ratio');
+
         const eventSource = new EventSource('/events');
 
         let currentFilter = "";
@@ -154,6 +173,15 @@
                 entry.style.display = text.includes(currentFilter) ? 'flex' : 'none';
             });
         };
+
+        function formatBytes(bytes, decimals = 2) {
+            if (!+bytes) return '0 B';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+        }
 
         eventSource.onopen = () => {
             status.textContent = 'Connected';
@@ -167,8 +195,24 @@
         };
 
         eventSource.onmessage = (event) => {
-            console.log('Received event:', event.data);
+            // console.log('Received event:', event.data);
             const msg = JSON.parse(event.data);
+
+            if (msg.type === "Stats") {
+                statLogs.textContent = msg.log_count;
+                statVars.textContent = msg.variable_count;
+                statTpls.textContent = msg.template_count;
+
+                const orig = msg.original_size || 0;
+                const comp = msg.compressed_size || 0;
+                const ratio = comp > 0 ? (orig / comp).toFixed(1) : "1.0";
+
+                statSize.textContent = formatBytes(orig);
+                statComp.textContent = formatBytes(comp);
+                statRatio.textContent = ratio + "x";
+                return;
+            }
+
             const entry = document.createElement('div');
             entry.className = 'log-entry';
 

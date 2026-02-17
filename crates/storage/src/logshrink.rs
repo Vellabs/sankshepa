@@ -134,48 +134,56 @@ impl LogChunk {
 
         for (tokens, member_indices) in group_templates {
             let template_str = tokens.join(" ");
-            let template_id = if let Some(&id) = self.templates.get(&template_str) {
-                id
-            } else {
-                let id = self.next_template_id;
-                self.templates.insert(template_str.clone(), id);
-                self.next_template_id += 1;
-                id
-            };
+            let template_id = self.get_or_create_template_id(&template_str);
 
             for &idx in &member_indices {
-                let msg = self.raw_messages[idx].clone();
-                let msg_tokens: Vec<&str> = msg.message.split_whitespace().collect();
-                let mut variables = Vec::new();
-
-                for (i, token) in tokens.iter().enumerate() {
-                    if token == "<*>" && i < msg_tokens.len() {
-                        variables.push(msg_tokens[i].to_string());
-                    }
-                }
-
-                let hostname_id = self.intern_string(msg.hostname);
-                let app_name_id = self.intern_string(msg.app_name);
-                let procid_id = self.intern_string(msg.procid);
-                let msgid_id = self.intern_string(msg.msgid);
-                let structured_data_id = self.intern_string(msg.structured_data);
-                let node_id_id = self.intern_string(msg.node_id);
-
-                self.records.push(LogRecord {
-                    timestamp: msg.timestamp.unwrap_or_else(Utc::now).timestamp_millis(),
-                    priority: msg.priority,
-                    hostname_id,
-                    app_name_id,
-                    procid_id,
-                    msgid_id,
-                    structured_data_id,
-                    template_id,
-                    variables,
-                    is_rfc5424: msg.is_rfc5424,
-                    node_id_id,
-                });
+                self.record_log_at_index(idx, &tokens, template_id);
             }
         }
+    }
+
+    fn get_or_create_template_id(&mut self, template_str: &str) -> u32 {
+        if let Some(&id) = self.templates.get(template_str) {
+            id
+        } else {
+            let id = self.next_template_id;
+            self.templates.insert(template_str.to_string(), id);
+            self.next_template_id += 1;
+            id
+        }
+    }
+
+    fn record_log_at_index(&mut self, idx: usize, tokens: &[String], template_id: u32) {
+        let msg = self.raw_messages[idx].clone();
+        let msg_tokens: Vec<&str> = msg.message.split_whitespace().collect();
+        let mut variables = Vec::new();
+
+        for (i, token) in tokens.iter().enumerate() {
+            if token == "<*>" && i < msg_tokens.len() {
+                variables.push(msg_tokens[i].to_string());
+            }
+        }
+
+        let hostname_id = self.intern_string(msg.hostname);
+        let app_name_id = self.intern_string(msg.app_name);
+        let procid_id = self.intern_string(msg.procid);
+        let msgid_id = self.intern_string(msg.msgid);
+        let structured_data_id = self.intern_string(msg.structured_data);
+        let node_id_id = self.intern_string(msg.node_id);
+
+        self.records.push(LogRecord {
+            timestamp: msg.timestamp.unwrap_or_else(Utc::now).timestamp_millis(),
+            priority: msg.priority,
+            hostname_id,
+            app_name_id,
+            procid_id,
+            msgid_id,
+            structured_data_id,
+            template_id,
+            variables,
+            is_rfc5424: msg.is_rfc5424,
+            node_id_id,
+        });
     }
 
     fn is_similar(&self, template: &[String], tokens: &[String]) -> bool {
@@ -224,6 +232,7 @@ mod tests {
             structured_data: None,
             message: text.to_string(),
             is_rfc5424: false,
+            node_id: None,
         }
     }
 
@@ -254,5 +263,90 @@ mod tests {
             alice_record.variables,
             vec!["alice".to_string(), "192.168.1.1".to_string()]
         );
+    }
+
+    #[test]
+    fn test_different_lengths_not_merged() {
+        let mut chunk = LogChunk::new();
+        chunk.add_message(create_msg("Short msg"));
+        chunk.add_message(create_msg("Very long message indeed"));
+
+        chunk.finish_and_process();
+
+        assert_eq!(chunk.templates.len(), 2);
+        assert!(chunk.templates.contains_key("Short msg"));
+        assert!(chunk.templates.contains_key("Very long message indeed"));
+    }
+
+    #[test]
+    fn test_low_similarity_not_merged() {
+        let mut chunk = LogChunk::new();
+        // 2/5 tokens match -> 0.4 similarity < 0.5
+        chunk.add_message(create_msg("A B C D E"));
+        chunk.add_message(create_msg("A B X Y Z"));
+
+        chunk.finish_and_process();
+
+        assert_eq!(chunk.templates.len(), 2);
+    }
+
+    #[test]
+    fn test_high_similarity_merged() {
+        let mut chunk = LogChunk::new();
+        // 3/5 tokens match -> 0.6 similarity > 0.5
+        chunk.add_message(create_msg("A B C D E"));
+        chunk.add_message(create_msg("A B C X Y"));
+
+        chunk.finish_and_process();
+
+        assert_eq!(chunk.templates.len(), 1);
+        assert!(chunk.templates.contains_key("A B C <*> <*>"));
+    }
+
+    #[test]
+    fn test_identical_messages() {
+        let mut chunk = LogChunk::new();
+        chunk.add_message(create_msg("Same same same"));
+        chunk.add_message(create_msg("Same same same"));
+
+        chunk.finish_and_process();
+
+        assert_eq!(chunk.templates.len(), 1);
+        assert!(chunk.templates.contains_key("Same same same"));
+        for record in &chunk.records {
+            assert!(record.variables.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_template_evolution() {
+        let mut chunk = LogChunk::new();
+        chunk.add_message(create_msg("User alice logged in"));
+        chunk.add_message(create_msg("User bob logged in"));
+        chunk.add_message(create_msg("User charlie signed out")); // Different length or similarity? 
+        // "User charlie signed out" -> length 4
+        // "User alice logged in" -> length 4
+        // Similarity between "User <*> logged in" and "User charlie signed out":
+        // Tokens: [User, charlie, signed, out]
+        // Template: [User, <*>, logged, in]
+        // Matches: User, charlie (matches <*>).
+        // Total matches: 2/4 = 0.5. Merged!
+
+        chunk.add_message(create_msg("User dave signed out"));
+
+        chunk.finish_and_process();
+
+        // Let's see what happens.
+        // 1. "User alice logged in"
+        // 2. "User bob logged in" -> Match (3/4 = 0.75) -> Template "User <*> logged in"
+        // 3. "User charlie signed out" -> Match with "User <*> logged in" (2/4 = 0.5)
+        //    -> Merged into "User <*> <*> <*>"? No, let's see.
+        //    "User", "<*>" vs "User", "charlie" -> match
+        //    "logged" vs "signed" -> mismatch -> <*>
+        //    "in" vs "out" -> mismatch -> <*>
+        //    Result: "User <*> <*> <*>"
+
+        assert_eq!(chunk.templates.len(), 1);
+        assert!(chunk.templates.contains_key("User <*> <*> <*>"));
     }
 }

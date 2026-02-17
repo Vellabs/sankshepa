@@ -1,0 +1,3 @@
+This is a totally non-compliant log line.
+Another one without any syslog headers.
+Just some random text 12345.

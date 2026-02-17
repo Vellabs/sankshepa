@@ -6,18 +6,32 @@ use axum::{
 };
 use futures_util::stream::Stream;
 use sankshepa_protocol::SyslogMessage;
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use tokio::sync::broadcast;
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::info;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum UiMessage {
+    Log(SyslogMessage),
+    Stats {
+        template_count: u32,
+        log_count: usize,
+        variable_count: usize,
+        original_size: u64,
+        compressed_size: u64,
+    },
+}
+
 pub struct UiServer {
-    tx: broadcast::Sender<SyslogMessage>,
+    tx: broadcast::Sender<UiMessage>,
 }
 
 impl UiServer {
-    pub fn new(tx: broadcast::Sender<SyslogMessage>) -> Self {
+    pub fn new(tx: broadcast::Sender<UiMessage>) -> Self {
         Self { tx }
     }
 
@@ -39,7 +53,7 @@ async fn index() -> axum::response::Html<&'static str> {
 }
 
 async fn sse_handler(
-    State(tx): State<broadcast::Sender<SyslogMessage>>,
+    State(tx): State<broadcast::Sender<UiMessage>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     info!("New SSE subscriber connected");
     let rx = tx.subscribe();

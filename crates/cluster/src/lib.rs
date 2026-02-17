@@ -61,12 +61,10 @@ pub struct ClusterManager {
     known_peers: Vec<String>,
     gossip_manager: GossipManager,
     #[allow(dead_code)]
-    template_rx: mpsc::Receiver<String>,
-    #[allow(dead_code)]
-    ext_template_tx: broadcast::Sender<String>,
-    /// Path for persistent replication log
-    #[allow(dead_code)]
-    log_path: Option<String>,
+    template_rx: mpsc::Receiver<(String, tokio::sync::oneshot::Sender<u32>)>,
+    /// Log variables sender
+    log_sender: mpsc::Sender<(u32, Vec<String>)>,
+    log_receiver: Option<mpsc::Receiver<(u32, Vec<String>)>>,
 }
 
 impl ClusterManager {
@@ -75,13 +73,15 @@ impl ClusterManager {
         node_id: String,
         bind_addr: SocketAddr,
         initial_peers: Vec<String>,
-        ext_template_tx: broadcast::Sender<String>,
+        ext_template_tx: broadcast::Sender<(u32, String)>,
+        ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
     ) -> Self {
         Self::with_config(
             node_id,
             bind_addr,
             initial_peers,
             ext_template_tx,
+            ext_log_tx,
             GossipConfig::default(),
             None,
         )
@@ -92,15 +92,19 @@ impl ClusterManager {
         node_id: String,
         bind_addr: SocketAddr,
         initial_peers: Vec<String>,
-        ext_template_tx: broadcast::Sender<String>,
+        ext_template_tx: broadcast::Sender<(u32, String)>,
+        ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
         log_path: String,
     ) -> anyhow::Result<Self> {
         let (gossip_manager, template_rx) = GossipManager::with_persistence(
             node_id.clone(),
             GossipConfig::default(),
+            ext_log_tx.clone(),
             ext_template_tx.clone(),
             &log_path,
         )?;
+
+        let (log_sender, log_receiver) = mpsc::channel(100);
 
         Ok(Self {
             node_id,
@@ -108,8 +112,8 @@ impl ClusterManager {
             known_peers: initial_peers,
             gossip_manager,
             template_rx,
-            ext_template_tx,
-            log_path: Some(log_path),
+            log_sender,
+            log_receiver: Some(log_receiver),
         })
     }
 
@@ -118,12 +122,19 @@ impl ClusterManager {
         node_id: String,
         bind_addr: SocketAddr,
         initial_peers: Vec<String>,
-        ext_template_tx: broadcast::Sender<String>,
+        ext_template_tx: broadcast::Sender<(u32, String)>,
+        ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
         config: GossipConfig,
-        log_path: Option<String>,
+        _log_path: Option<String>,
     ) -> Self {
-        let (gossip_manager, template_rx) =
-            GossipManager::new(node_id.clone(), config, ext_template_tx.clone());
+        let (gossip_manager, template_rx) = GossipManager::new(
+            node_id.clone(),
+            config,
+            ext_template_tx.clone(),
+            ext_log_tx.clone(),
+        );
+
+        let (log_sender, log_receiver) = mpsc::channel(100);
 
         Self {
             node_id,
@@ -131,24 +142,39 @@ impl ClusterManager {
             known_peers: initial_peers,
             gossip_manager,
             template_rx,
-            ext_template_tx,
-            log_path,
+            log_sender,
+            log_receiver: Some(log_receiver),
         }
     }
 
+    pub async fn ensure_template(&self, pattern: String) -> Option<u32> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let sender = self.gossip_manager.template_sender();
+        
+        if sender.send((pattern, tx)).await.is_ok() {
+            rx.await.ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn log_sender(&self) -> mpsc::Sender<(u32, Vec<String>)> {
+        self.log_sender.clone()
+    }
+
     /// Get the template sender for adding new templates.
-    pub fn get_template_sender(&self) -> mpsc::Sender<String> {
+    pub fn get_template_sender(&self) -> mpsc::Sender<(String, tokio::sync::oneshot::Sender<u32>)> {
         self.gossip_manager.template_sender()
     }
 
     /// Alias for compatibility - use get_template_sender instead.
     #[deprecated(note = "Use get_template_sender() instead")]
-    pub fn template_tx_clone(&self) -> mpsc::Sender<String> {
+    pub fn template_tx_clone(&self) -> mpsc::Sender<(String, tokio::sync::oneshot::Sender<u32>)> {
         self.gossip_manager.template_sender()
     }
 
     /// Get the template sender (legacy compatibility).
-    pub fn template_tx(&self) -> mpsc::Sender<String> {
+    pub fn template_tx(&self) -> mpsc::Sender<(String, tokio::sync::oneshot::Sender<u32>)> {
         self.gossip_manager.template_sender()
     }
 
@@ -248,12 +274,33 @@ impl ClusterManager {
         });
 
         // Template propagation task (receives from local template_tx)
-        let _socket_prop = socket.clone();
-        let _gossip_for_prop = gossip_hb.clone();
+        let socket_prop = socket.clone();
+        let gossip_for_prop = gossip_hb.clone();
+        let mut template_rx = self.template_rx;
         tokio::spawn(async move {
-            loop {
-                // This is a placeholder - templates are now handled via GossipManager
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            while let Some((pattern, reply_tx)) = template_rx.recv().await {
+                let (id, entry) = gossip_for_prop.add_template(pattern.clone()).await;
+                if let Err(e) = reply_tx.send(id) {
+                    warn!("Failed to reply with template ID: {}", e);
+                }
+                
+                // Gossip immediately
+                if let Err(e) = gossip_for_prop.gossip_entry(entry, &socket_prop, None).await {
+                    warn!("Failed to gossip new template: {}", e);
+                }
+            }
+        });
+
+        // Log Propagation task
+        let gossip_for_logs = gossip_hb.clone();
+        let socket_logs = socket.clone();
+        let mut log_rx = self.log_receiver.unwrap();
+        tokio::spawn(async move {
+            while let Some((tid, vars)) = log_rx.recv().await {
+                let entry = gossip_for_logs.add_logs(tid, vars).await;
+                if let Err(e) = gossip_for_logs.gossip_entry(entry, &socket_logs, None).await {
+                    tracing::warn!("Failed to gossip log entry: {}", e);
+                }
             }
         });
 
@@ -311,7 +358,8 @@ pub struct ClusterManagerBuilder {
     node_id: String,
     bind_addr: SocketAddr,
     initial_peers: Vec<String>,
-    ext_template_tx: broadcast::Sender<String>,
+    ext_template_tx: broadcast::Sender<(u32, String)>,
+    ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
     config: GossipConfig,
     log_path: Option<String>,
 }
@@ -321,13 +369,15 @@ impl ClusterManagerBuilder {
     pub fn new(
         node_id: String,
         bind_addr: SocketAddr,
-        ext_template_tx: broadcast::Sender<String>,
+        ext_template_tx: broadcast::Sender<(u32, String)>,
+        ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
     ) -> Self {
         Self {
             node_id,
             bind_addr,
             initial_peers: Vec::new(),
             ext_template_tx,
+            ext_log_tx,
             config: GossipConfig::default(),
             log_path: None,
         }
@@ -370,6 +420,7 @@ impl ClusterManagerBuilder {
             self.bind_addr,
             self.initial_peers,
             self.ext_template_tx,
+            self.ext_log_tx,
             self.config,
             self.log_path,
         )
@@ -383,9 +434,10 @@ mod tests {
     #[test]
     fn test_builder() {
         let (tx, _rx) = broadcast::channel(100);
+        let (log_tx, _log_rx) = broadcast::channel(100);
         let addr: SocketAddr = "127.0.0.1:1701".parse().unwrap();
 
-        let manager = ClusterManagerBuilder::new("node1".to_string(), addr, tx)
+        let manager = ClusterManagerBuilder::new("node1".to_string(), addr, tx, log_tx)
             .with_peers(vec!["127.0.0.1:1702".to_string()])
             .with_heartbeat_interval(10)
             .with_sync_interval(60)

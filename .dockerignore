@@ -6,4 +6,3 @@ deploy/
 docs/
 bench_postcard.lshrink
 *.lshrink
-Cargo.lock

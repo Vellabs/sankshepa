@@ -263,6 +263,10 @@ impl CRDTTemplateStore {
 
     /// Import a template from replication (with known ID).
     pub fn import_template(&mut self, pattern: String, template_id: u32, origin_node: &str) {
+        // ALWAYS update the ID-to-Pattern map. In an AP system, multiple nodes might
+        // assign different IDs to the same pattern concurrently. We must recognize all of them.
+        self.id_to_pattern.insert(template_id, pattern.clone());
+
         if self.templates.contains(&pattern) {
             return;
         }

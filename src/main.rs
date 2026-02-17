@@ -1,15 +1,13 @@
+mod node;
+
 use chrono::{TimeZone, Utc};
 use clap::{Parser, Subcommand};
-use sankshepa_cluster::ClusterManager;
-use sankshepa_ingestion::IngestionServer;
+use node::{Node, NodeConfig};
 use sankshepa_protocol::UnifiedParser;
 use sankshepa_storage::StorageEngine;
 use sankshepa_storage::logshrink::LogChunk;
-use sankshepa_ui::UiServer;
-use std::io::{self, Write};
-use std::net::SocketAddr;
+use std::io::{self, BufRead, Write};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
 
 #[derive(Parser)]
@@ -24,13 +22,13 @@ struct Cli {
 enum Commands {
     /// Starts the syslog collector
     Serve {
-        #[arg(long, default_value = "127.0.0.1:1514")]
+        #[arg(long, default_value = "0.0.0.0:1514")]
         udp_addr: String,
-        #[arg(long, default_value = "127.0.0.1:1514")]
+        #[arg(long, default_value = "0.0.0.0:1514")]
         tcp_addr: String,
-        #[arg(long, default_value = "127.0.0.1:1601")]
+        #[arg(long, default_value = "0.0.0.0:1601")]
         beep_addr: String,
-        #[arg(long, default_value = "127.0.0.1:8080")]
+        #[arg(long, default_value = "0.0.0.0:8080")]
         ui_addr: String,
         #[arg(long, default_value = "logs.lshrink")]
         output: String,
@@ -38,7 +36,7 @@ enum Commands {
         #[arg(long)]
         node_id: Option<String>,
         /// Cluster management address (UDP)
-        #[arg(long, default_value = "127.0.0.1:1701")]
+        #[arg(long, default_value = "0.0.0.0:1701")]
         cluster_addr: String,
         /// Initial peer addresses
         #[arg(long)]
@@ -56,7 +54,7 @@ enum Commands {
     },
     /// Generates test syslog messages
     Generate {
-        #[arg(long, default_value = "127.0.0.1:1514")]
+        #[arg(long, default_value = "0.0.0.0:1514")]
         addr: String,
         #[arg(long, default_value = "tcp")]
         protocol: String,
@@ -69,6 +67,11 @@ enum Commands {
         count: usize,
         #[arg(long, default_value = "bench.lshrink")]
         output: String,
+        #[arg(long, default_value = "low")]
+        entropy: String,
+        /// Input log file or directory to benchmark against (disables synthetic generation)
+        #[arg(long)]
+        input: Option<String>,
     },
 }
 
@@ -91,284 +94,383 @@ async fn main() -> anyhow::Result<()> {
             cluster_addr,
             peers,
         } => {
-            let (tx, mut rx) = mpsc::channel(100);
-            let (ui_tx, _) = broadcast::channel(1000);
-            let (cluster_template_tx, mut cluster_template_rx) = broadcast::channel(100);
-
-            let server = IngestionServer::new(udp_addr, tcp_addr, beep_addr, tx);
-            let ui_server = UiServer::new(ui_tx.clone());
             let node_id = node_id.unwrap_or_else(|| format!("node-{}", std::process::id()));
-            let cluster_socket_addr: SocketAddr = cluster_addr.parse()?;
-            let cluster_manager = ClusterManager::new(
-                node_id.clone(),
-                cluster_socket_addr,
+            let config = NodeConfig {
+                udp_addr,
+                tcp_addr,
+                beep_addr,
+                ui_addr,
+                output_path: output,
+                node_id,
+                cluster_addr,
                 peers,
-                cluster_template_tx.clone(),
-            );
+            };
 
-            let cluster_tx = cluster_manager.template_tx.clone();
-            let output_path = output.clone();
-            let ui_tx_clone = ui_tx.clone();
-            let storage_handle = tokio::spawn(async move {
-                let mut chunk = LogChunk::new();
-                let mut count = 0;
-                let node_id_for_logs = node_id.clone();
-                loop {
-                    tokio::select! {
-                        Some(mut msg) = rx.recv() => {
-                            msg.node_id = Some(node_id_for_logs.clone());
-                            let _ = ui_tx_clone.send(msg.clone());
-                            chunk.add_message(msg);
-                            count += 1;
-                            if count >= 10 {
-                                let new_templates = chunk.finish_and_process();
-                                for t in new_templates {
-                                    let _ = cluster_tx.send(t).await;
-                                }
-                                let _ = StorageEngine::save_chunk(chunk, &output_path);
-                                chunk = LogChunk::new();
-                                count = 0;
-                                info!("Saved chunk to {}", output_path);
-                            }
-                        }
-                        Ok(pattern) = cluster_template_rx.recv() => {
-                            chunk.import_template(pattern);
-                        }
-                        _ = tokio::signal::ctrl_c() => {
-                            if count > 0 {
-                                chunk.finish_and_process();
-                                let _ = StorageEngine::save_chunk(chunk, &output_path);
-                                info!("Saved final chunk on Ctrl-C");
-                            }
-                            break;
-                        }
-                    }
-                }
-            });
-
-            let ui_handle = tokio::spawn(async move { ui_server.run(&ui_addr).await });
-            let cluster_handle = tokio::spawn(async move { cluster_manager.run().await });
-
-            tokio::select! {
-                res = server.run() => {
-                    if let Err(e) = res {
-                        error!("Ingestion server error: {}", e);
-                    }
-                }
-                res = ui_handle => {
-                    match res {
-                        Ok(Ok(_)) => info!("UI server stopped"),
-                        Ok(Err(e)) => error!("UI server error: {}", e),
-                        Err(e) => error!("UI task panicked: {}", e),
-                    }
-                }
-                res = cluster_handle => {
-                    match res {
-                        Ok(Ok(_)) => info!("Cluster manager stopped"),
-                        Ok(Err(e)) => error!("Cluster manager error: {}", e),
-                        Err(e) => error!("Cluster task panicked: {}", e),
-                    }
-                }
-                _ = storage_handle => {
-                    info!("Storage handler stopped");
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Shutdown signal received");
-                }
-            }
-            info!("Sankshepa shutting down...");
+            let node = Node::new(config)?;
+            node.run().await?;
         }
         Commands::Query {
             input,
             template_id,
             filter,
         } => {
-            let chunk = StorageEngine::load_chunk(&input)?;
-
-            let mut pattern_map = std::collections::HashMap::new();
-            for (pattern, &id) in &chunk.templates {
-                pattern_map.insert(id, pattern.clone());
-            }
-
-            let filter_lower = filter.as_ref().map(|s| s.to_lowercase());
-            let mut stdout = io::stdout().lock();
-
-            for record in chunk.records {
-                if template_id.is_some_and(|tid| record.template_id != tid) {
-                    continue;
-                }
-
-                let pattern = pattern_map
-                    .get(&record.template_id)
-                    .cloned()
-                    .unwrap_or_else(|| "UNKNOWN".to_string());
-                let mut reconstructed = pattern.clone();
-                for var in record.variables {
-                    reconstructed = reconstructed.replacen("<*>", &var, 1);
-                }
-
-                let host = record
-                    .hostname_id
-                    .and_then(|id| chunk.string_pool.get(id as usize))
-                    .map(|s| s.as_str())
-                    .unwrap_or("-");
-                let app = record
-                    .app_name_id
-                    .and_then(|id| chunk.string_pool.get(id as usize))
-                    .map(|s| s.as_str())
-                    .unwrap_or("-");
-                let proc = record
-                    .procid_id
-                    .and_then(|id| chunk.string_pool.get(id as usize))
-                    .map(|s| s.as_str())
-                    .unwrap_or("-");
-                let msgid = record
-                    .msgid_id
-                    .and_then(|id| chunk.string_pool.get(id as usize))
-                    .map(|s| s.as_str())
-                    .unwrap_or("-");
-                let sd = record
-                    .structured_data_id
-                    .and_then(|id| chunk.string_pool.get(id as usize))
-                    .map(|s| s.as_str())
-                    .unwrap_or("-");
-                let node = record
-                    .node_id_id
-                    .and_then(|id| chunk.string_pool.get(id as usize))
-                    .map(|s| s.as_str())
-                    .unwrap_or("-");
-
-                if let Some(f) = &filter_lower {
-                    let hay = format!(
-                        "{} {} {} {} {} {} {} {}",
-                        host, app, proc, msgid, sd, reconstructed, record.priority, node
-                    )
-                    .to_lowercase();
-                    if !hay.contains(f) {
-                        continue;
-                    }
-                }
-
-                if let Some(dt) = Utc.timestamp_millis_opt(record.timestamp).earliest() {
-                    let res = if record.is_rfc5424 {
-                        writeln!(
-                            stdout,
-                            "[{}] <{}>1 {} {} {} {} {} [{}] {}",
-                            node,
-                            record.priority,
-                            dt.to_rfc3339(),
-                            host,
-                            app,
-                            proc,
-                            msgid,
-                            sd,
-                            reconstructed
-                        )
-                    } else {
-                        // RFC 3164
-                        writeln!(
-                            stdout,
-                            "[{}] <{}>{} {} {}",
-                            node,
-                            record.priority,
-                            dt.format("%b %d %H:%M:%S"),
-                            host,
-                            reconstructed
-                        )
-                    };
-
-                    if let Err(e) = res {
-                        if e.kind() == io::ErrorKind::BrokenPipe {
-                            return Ok(());
-                        }
-                        return Err(e.into());
-                    }
-                }
-            }
+            query_logs(&input, template_id, filter.as_deref())?;
         }
         Commands::Generate {
             addr,
             protocol,
             count,
         } => {
-            if protocol == "udp" {
-                let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
-                for i in 0..count {
-                    let msg = format!(
-                        "<34>1 2023-10-11T22:14:15.003Z myhost myapp 1234 ID47 [exampleSDID@32473] User user{} failed login from IP 192.168.1.{}",
-                        i, i
-                    );
-                    socket.send_to(msg.as_bytes(), &addr).await?;
-                }
-            } else {
-                let mut stream = tokio::net::TcpStream::connect(&addr).await?;
-                for i in 0..count {
-                    let msg = format!(
-                        "<34>1 2023-10-11T22:14:15.003Z myhost myapp 1234 ID47 [exampleSDID@32473] User user{} failed login from IP 192.168.1.{}\n",
-                        i, i
-                    );
-                    stream.write_all(msg.as_bytes()).await?;
-                }
-            }
-            info!("Generated {} messages to {}", count, addr);
+            generate_logs(&addr, &protocol, count).await?;
         }
-        Commands::Bench { count, output } => {
-            info!("Starting storage benchmark with {} logs...", count);
-            let mut raw_size = 0;
-            let mut chunk = LogChunk::new();
-            let mut total_chunks_saved = 0;
-
-            // Remove existing bench file if any
-            let _ = std::fs::remove_file(&output);
-
-            for i in 0..count {
-                let msg_str = format!(
-                    "<34>1 2023-10-11T22:14:15.003Z myhost myapp {} ID47 [exampleSDID@32473] User {} failed login from IP 192.168.1.{}",
-                    1000 + (i % 10),
-                    if i % 2 == 0 { "alice" } else { "bob" },
-                    i % 255
-                );
-                raw_size += msg_str.len();
-
-                if let Ok(msg) = UnifiedParser::parse(&msg_str) {
-                    chunk.add_message(msg);
-                }
-
-                if (i + 1) % 1000 == 0 {
-                    chunk.finish_and_process();
-                    StorageEngine::save_chunk(chunk, &output)?;
-                    chunk = LogChunk::new();
-                    total_chunks_saved += 1;
-                }
-            }
-
-            if !chunk.raw_messages.is_empty() {
-                chunk.finish_and_process();
-                StorageEngine::save_chunk(chunk, &output)?;
-                total_chunks_saved += 1;
-            }
-
-            let compressed_size = std::fs::metadata(&output)?.len();
-
-            println!("\nBenchmark Results:");
-            println!("------------------");
-            println!("Log Count:        {}", count);
-            println!("Raw Text Size:    {:.2} MB", raw_size as f64 / 1_048_576.0);
-            println!(
-                "LogShrink Size:   {:.2} MB",
-                compressed_size as f64 / 1_048_576.0
-            );
-            println!(
-                "Reduction Ratio:  {:.2}x",
-                raw_size as f64 / compressed_size as f64
-            );
-            println!(
-                "Space Savings:    {:.1}%",
-                (1.0 - (compressed_size as f64 / raw_size as f64)) * 100.0
-            );
-            println!("Chunks Saved:     {}", total_chunks_saved);
+        Commands::Bench {
+            count,
+            output,
+            entropy,
+            input,
+        } => {
+            run_benchmark(count, &output, &entropy, input)?;
         }
     }
 
     Ok(())
 }
+
+fn query_logs(input: &str, template_id: Option<u32>, filter: Option<&str>) -> anyhow::Result<()> {
+    let mut paths = Vec::new();
+    let input_path = std::path::Path::new(input);
+
+    if input_path.is_dir() {
+        for entry in walkdir::WalkDir::new(input_path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "lshrink") {
+                paths.push(entry.path().to_path_buf());
+            }
+        }
+    } else {
+        paths.push(std::path::PathBuf::from(input));
+    }
+
+    let filter_lower = filter.map(|s| s.to_lowercase());
+    let mut stdout = io::stdout().lock();
+
+    for path in paths {
+        let chunk = match StorageEngine::load_chunk(path.to_str().unwrap()) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to load chunk at {:?}: {}", path, e);
+                continue;
+            }
+        };
+
+        let mut pattern_map = std::collections::HashMap::new();
+        for (pattern, &id) in &chunk.templates {
+            pattern_map.insert(id, pattern.clone());
+        }
+
+        for record in chunk.records {
+            if template_id.is_some_and(|tid| record.template_id != tid) {
+                continue;
+            }
+
+            let pattern = pattern_map
+                .get(&record.template_id)
+                .cloned()
+                .unwrap_or_else(|| "UNKNOWN".to_string());
+            let mut reconstructed = pattern;
+            for var in record.variables {
+                reconstructed = reconstructed.replacen("<*>", &var, 1);
+            }
+
+            let host = record
+                .hostname_id
+                .and_then(|id| chunk.string_pool.get(id as usize))
+                .map(|s| s.as_str())
+                .unwrap_or("-");
+            let app = record
+                .app_name_id
+                .and_then(|id| chunk.string_pool.get(id as usize))
+                .map(|s| s.as_str())
+                .unwrap_or("-");
+            let proc = record
+                .procid_id
+                .and_then(|id| chunk.string_pool.get(id as usize))
+                .map(|s| s.as_str())
+                .unwrap_or("-");
+            let msgid = record
+                .msgid_id
+                .and_then(|id| chunk.string_pool.get(id as usize))
+                .map(|s| s.as_str())
+                .unwrap_or("-");
+            let sd = record
+                .structured_data_id
+                .and_then(|id| chunk.string_pool.get(id as usize))
+                .map(|s| s.as_str())
+                .unwrap_or("-");
+            let node = record
+                .node_id_id
+                .and_then(|id| chunk.string_pool.get(id as usize))
+                .map(|s| s.as_str())
+                .unwrap_or("-");
+
+            if let Some(f) = &filter_lower {
+                let hay = format!(
+                    "{} {} {} {} {} {} {} {}",
+                    host, app, proc, msgid, sd, reconstructed, record.priority, node
+                )
+                .to_lowercase();
+                if !hay.contains(f) {
+                    continue;
+                }
+            }
+
+            if let Some(dt) = Utc.timestamp_millis_opt(record.timestamp).earliest() {
+                if record.is_rfc5424 {
+                    writeln!(
+                        stdout,
+                        "[{}] <{}>1 {} {} {} {} {} [{}] {}",
+                        node,
+                        record.priority,
+                        dt.to_rfc3339(),
+                        host,
+                        app,
+                        proc,
+                        msgid,
+                        sd,
+                        reconstructed
+                    )?;
+                } else {
+                    writeln!(
+                        stdout,
+                        "[{}] <{}>{} {} {}",
+                        node,
+                        record.priority,
+                        dt.format("%b %d %H:%M:%S"),
+                        host,
+                        reconstructed
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn generate_logs(addr: &str, protocol: &str, count: usize) -> anyhow::Result<()> {
+    if protocol == "udp" {
+        let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+        for i in 0..count {
+            let msg = format!(
+                "<34>1 2023-10-11T22:14:15.003Z myhost myapp 1234 ID47 [exampleSDID@32473] User user{} failed login from IP 192.168.1.{}",
+                i, i
+            );
+            let _ = socket.send_to(msg.as_bytes(), addr).await;
+        }
+    } else {
+        let mut stream = tokio::net::TcpStream::connect(addr).await?;
+        for i in 0..count {
+            let msg = format!(
+                "<34>1 2023-10-11T22:14:15.003Z myhost myapp 1234 ID47 [exampleSDID@32473] User user{} failed login from IP 192.168.1.{}\n",
+                i, i
+            );
+            let _ = stream.write_all(msg.as_bytes()).await;
+        }
+    }
+    info!("Generated {} messages to {}", count, addr);
+    Ok(())
+}
+
+fn run_benchmark(
+    count: usize,
+    output: &str,
+    entropy_str: &str,
+    input_path: Option<String>,
+) -> anyhow::Result<()> {
+    info!(
+        "Starting storage benchmark (mode: {})...",
+        if let Some(ref p) = input_path {
+            format!("file: {}", p)
+        } else {
+            format!("synthetic: {}", entropy_str)
+        }
+    );
+    let mut raw_size = 0;
+    let mut chunk = LogChunk::new();
+    let mut total_chunks_saved = 0;
+    let mut all_raw_logs = Vec::new();
+
+    let _ = std::fs::remove_file(output);
+
+    let messages: Vec<String> = if let Some(ref path) = input_path {
+        let mut lines = Vec::new();
+        let path_obj = std::path::Path::new(&path);
+        let paths = if path_obj.is_dir() {
+            std::fs::read_dir(path_obj)?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .map(|e| e.path())
+                .collect()
+        } else {
+            vec![path_obj.to_path_buf()]
+        };
+
+        for p in paths {
+            let file = std::fs::File::open(p)?;
+            let reader = std::io::BufReader::new(file);
+            for line in reader.lines() {
+                if let Ok(l) = line {
+                    if !l.trim().is_empty() {
+                        lines.push(l);
+                    }
+                }
+            }
+        }
+        lines
+    } else {
+        let mut msgs = Vec::with_capacity(count);
+        for i in 0..count {
+            let msg_str = match entropy_str {
+                "low" => format!(
+                    "<34>1 2023-10-11T22:14:15.003Z myhost myapp {} ID47 [exampleSDID@32473] User {} failed at login from IP 192.168.1.{}",
+                    1000 + (i % 10),
+                    if i % 2 == 0 { "alice" } else { "bob" },
+                    i % 255
+                ),
+                "mixed" => {
+                    if i % 10 == 0 {
+                        format!(
+                            "<34>1 2023-10-11T22:14:15.003Z host{} app{} {} ID{} [sd@1] Random event {}",
+                            i % 5,
+                            i % 3,
+                            i,
+                            i % 100,
+                            i
+                        )
+                    } else {
+                        format!(
+                            "<34>1 2023-10-11T22:14:15.003Z myhost myapp {} ID47 [exampleSDID@32473] User {} failed at login from IP 192.168.1.{}",
+                            1000 + (i % 10),
+                            if i % 2 == 0 { "alice" } else { "bob" },
+                            i % 255
+                        )
+                    }
+                }
+                "high" => format!(
+                    "<34>1 2023-10-11T22:14:15.003Z host{} app{} {} ID{} [sd@{}] Unusual message containing random salt {}",
+                    i,
+                    i,
+                    i,
+                    i,
+                    i,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_nanos()
+                        % 1000000
+                ),
+                "loghub" => match i % 3 {
+                    0 => format!(
+                        "<34>1 2023-10-11T22:14:15.003Z hdfs_node{} datanode {} ID{} [sd@1] Receiving block blk_-{} src: /192.168.1.{} dest: /192.168.1.{}",
+                        i % 10,
+                        1000 + (i % 5),
+                        i % 100,
+                        i % 500,
+                        i % 255,
+                        (i + 1) % 255
+                    ),
+                    1 => format!(
+                        "<34>1 2023-10-11T22:14:15.003Z bgl_node{} rts {} ID{} [sd@2] instruction cache parity error corrected: core.{} at address 0x{:08x}",
+                        i % 100,
+                        i % 50,
+                        i % 200,
+                        i % 4,
+                        i * 4096
+                    ),
+                    _ => format!(
+                        "<34>1 2023-10-11T22:14:15.003Z android_device{} ActivityManager {} ID{} [sd@3] START u0 {{act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.android.{}/.{} }} from uid {}",
+                        i % 20,
+                        2000 + (i % 10),
+                        i,
+                        ["settings", "vending", "chrome", "calendar"][i % 4],
+                        ["MainActivity", "HomeActivity", "Browser"][i % 3],
+                        10000 + (i % 100)
+                    ),
+                },
+                _ => return Err(anyhow::anyhow!("Unknown entropy level: {}", entropy_str)),
+            };
+            msgs.push(msg_str);
+        }
+        msgs
+    };
+
+    for (i, msg_str) in messages.iter().enumerate() {
+        raw_size += msg_str.len();
+        all_raw_logs.push(msg_str.clone());
+
+        if let Ok(msg) = UnifiedParser::parse(msg_str) {
+            chunk.add_message(msg);
+        }
+
+        if (i + 1) % 1000 == 0 {
+            chunk.finish_and_process();
+            StorageEngine::save_chunk(std::mem::take(&mut chunk), output)?;
+            total_chunks_saved += 1;
+        }
+    }
+
+    if !chunk.raw_messages.is_empty() {
+        chunk.finish_and_process();
+        StorageEngine::save_chunk(chunk, output)?;
+        total_chunks_saved += 1;
+    }
+
+    let compressed_size = if std::path::Path::new(output).exists() {
+        std::fs::metadata(output)?.len()
+    } else {
+        0
+    };
+
+    let raw_combined = all_raw_logs.join("\n");
+    let raw_zstd = zstd::stream::encode_all(raw_combined.as_bytes(), 3)?;
+    let raw_zstd_size = raw_zstd.len();
+
+    println!("\nBenchmark Results:");
+    println!("--------------------------------------");
+    if let Some(path) = input_path {
+        println!("Source:              {}", path);
+    } else {
+        println!("Entropy Level:       {}", entropy_str);
+    }
+    println!("Log Count:           {}", messages.len());
+    println!(
+        "Raw Text Size:       {:.2} MB",
+        raw_size as f64 / 1_048_576.0
+    );
+    println!(
+        "Raw + Zstd Size:     {:.2} MB ({:.2}x reduction)",
+        raw_zstd_size as f64 / 1_048_576.0,
+        raw_size as f64 / raw_zstd_size as f64
+    );
+    println!(
+        "LogShrink Size:      {:.2} MB ({:.2}x reduction)",
+        compressed_size as f64 / 1_048_576.0,
+        if compressed_size > 0 {
+            raw_size as f64 / compressed_size as f64
+        } else {
+            0.0
+        }
+    );
+    println!(
+        "Gains over Raw Zstd: {:.1}%",
+        if raw_zstd_size > 0 {
+            (1.0 - (compressed_size as f64 / raw_zstd_size as f64)) * 100.0
+        } else {
+            0.0
+        }
+    );
+    println!("Chunks Saved:        {}", total_chunks_saved);
+
+    Ok(())
+}
+
