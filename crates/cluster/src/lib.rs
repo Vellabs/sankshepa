@@ -150,7 +150,7 @@ impl ClusterManager {
     pub async fn ensure_template(&self, pattern: String) -> Option<u32> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let sender = self.gossip_manager.template_sender();
-        
+
         if sender.send((pattern, tx)).await.is_ok() {
             rx.await.ok()
         } else {
@@ -283,9 +283,12 @@ impl ClusterManager {
                 if let Err(e) = reply_tx.send(id) {
                     warn!("Failed to reply with template ID: {}", e);
                 }
-                
+
                 // Gossip immediately
-                if let Err(e) = gossip_for_prop.gossip_entry(entry, &socket_prop, None).await {
+                if let Err(e) = gossip_for_prop
+                    .gossip_entry(entry, &socket_prop, None)
+                    .await
+                {
                     warn!("Failed to gossip new template: {}", e);
                 }
             }
@@ -298,7 +301,10 @@ impl ClusterManager {
         tokio::spawn(async move {
             while let Some((tid, vars)) = log_rx.recv().await {
                 let entry = gossip_for_logs.add_logs(tid, vars).await;
-                if let Err(e) = gossip_for_logs.gossip_entry(entry, &socket_logs, None).await {
+                if let Err(e) = gossip_for_logs
+                    .gossip_entry(entry, &socket_logs, None)
+                    .await
+                {
                     tracing::warn!("Failed to gossip log entry: {}", e);
                 }
             }

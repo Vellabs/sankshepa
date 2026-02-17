@@ -6,13 +6,13 @@ use sankshepa_storage::StorageManager;
 use sankshepa_storage::logshrink::LogChunk;
 use sankshepa_ui::{UiMessage, UiServer};
 use std::collections::HashMap;
+use std::fs;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
-use std::fs;
-use std::path::PathBuf;
 
 pub struct NodeConfig {
     pub udp_addr: String,
@@ -123,17 +123,20 @@ impl Node {
         let pending_logs_path = PathBuf::from(&self.config.output_path).with_extension("pending");
 
         tokio::spawn(async move {
-            let mut pending_logs: HashMap<u32, Vec<(Vec<String>, i64)>> = if pending_logs_path.exists() {
-                match fs::read(&pending_logs_path).and_then(|b| postcard::from_bytes(&b).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))) {
-                    Ok(logs) => logs,
-                    Err(e) => {
-                        warn!("Failed to load pending logs: {}. Starting fresh.", e);
-                        HashMap::new()
+            let mut pending_logs: HashMap<u32, Vec<(Vec<String>, i64)>> =
+                if pending_logs_path.exists() {
+                    match fs::read(&pending_logs_path)
+                        .and_then(|b| postcard::from_bytes(&b).map_err(std::io::Error::other))
+                    {
+                        Ok(logs) => logs,
+                        Err(e) => {
+                            warn!("Failed to load pending logs: {}. Starting fresh.", e);
+                            HashMap::new()
+                        }
                     }
-                }
-            } else {
-                HashMap::new()
-            };
+                } else {
+                    HashMap::new()
+                };
 
             loop {
                 tokio::select! {
@@ -201,21 +204,21 @@ impl Node {
                                 };
 
                                 if should_buffer {
-                                    info!("Buffering log for unknown template {}. Map size: {}", 
+                                    info!("Buffering log for unknown template {}. Map size: {}",
                                         tid, template_map_clone.read().unwrap().len());
                                     pending_logs.entry(tid).or_default().push((vars, ts));
-                                    
+
                                     // Periodic persistence (or every log for maximum durability)
                                     if let Ok(bytes) = postcard::to_allocvec(&pending_logs) {
                                         let _ = fs::write(&pending_logs_path, bytes);
                                     }
+                                } else if let Some(msg) =
+                                    Self::reconstruct_cluster_log(tid, vars, ts, &template_map_clone)
+                                {
+                                    // info!("Reconstructed cluster log: {}", msg.message);
+                                    let _ = ui_tx_clone.send(UiMessage::Log(msg));
                                 } else {
-                                    if let Some(msg) = Self::reconstruct_cluster_log(tid, vars, ts, &template_map_clone) {
-                                        // info!("Reconstructed cluster log: {}", msg.message);
-                                        let _ = ui_tx_clone.send(UiMessage::Log(msg));
-                                    } else {
-                                        error!("Failed to reconstruct cluster log for tid={}", tid);
-                                    }
+                                    error!("Failed to reconstruct cluster log for tid={}", tid);
                                 }
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -318,10 +321,10 @@ impl Node {
         // Resolve all local templates to Global IDs
         for (pattern, &local_id) in &chunk.templates {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            if cluster_tx.send((pattern.clone(), tx)).await.is_ok() {
-                if let Ok(global_id) = rx.await {
-                    local_to_global.insert(local_id, global_id);
-                }
+            if cluster_tx.send((pattern.clone(), tx)).await.is_ok()
+                && let Ok(global_id) = rx.await
+            {
+                local_to_global.insert(local_id, global_id);
             }
         }
 

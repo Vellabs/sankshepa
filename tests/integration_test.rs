@@ -199,12 +199,17 @@ async fn test_custom_log_files() {
             let path = entry.path();
             if path.is_file() {
                 let content = fs::read_to_string(&path).expect("Failed to read test file");
-                let mut stream = tokio::net::TcpStream::connect("127.0.0.1:14515").await.expect("Failed to connect");
-                
+                let mut stream = tokio::net::TcpStream::connect("127.0.0.1:14515")
+                    .await
+                    .expect("Failed to connect");
+
                 use tokio::io::AsyncWriteExt;
                 for line in content.lines() {
                     if !line.trim().is_empty() {
-                        stream.write_all(format!("{}\n", line).as_bytes()).await.expect("Failed to write to stream");
+                        stream
+                            .write_all(format!("{}\n", line).as_bytes())
+                            .await
+                            .expect("Failed to write to stream");
                         total_lines += 1;
                     }
                 }
@@ -237,7 +242,7 @@ async fn test_custom_log_files() {
     let stdout = String::from_utf8_lossy(&query_output.stdout);
     let count = stdout.lines().count();
     println!("Total custom logs found: {}", count);
-    
+
     // Check if total lines match (Note: some empty lines might have been skipped)
     assert!(count > 0, "No logs found in output");
     assert_eq!(count, total_lines, "Logged count doesn't match sent lines");

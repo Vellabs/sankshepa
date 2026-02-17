@@ -37,12 +37,14 @@ impl StorageManager {
         // If it's a directory path (not ending in .lshrink), create it.
         // If it's a file path, create its parent.
         if !base_path.as_os_str().is_empty() {
-            if base_path.extension().map(|e| e != "lshrink").unwrap_or(true) {
+            if base_path
+                .extension()
+                .map(|e| e != "lshrink")
+                .unwrap_or(true)
+            {
                 let _ = fs::create_dir_all(&base_path);
-            } else if let Some(parent) = base_path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    let _ = fs::create_dir_all(parent);
-                }
+            } else if let Some(parent) = base_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                let _ = fs::create_dir_all(parent);
             }
         }
 
@@ -73,7 +75,11 @@ impl StorageManager {
         }
 
         // If base_path looks like a file, write directly to it (for tests/benchmarks)
-        if self.base_path.extension().is_some_and(|ext| ext == "lshrink") {
+        if self
+            .base_path
+            .extension()
+            .is_some_and(|ext| ext == "lshrink")
+        {
             return self.backend.save_chunk(chunk, &self.base_path);
         }
 
@@ -115,23 +121,21 @@ impl StorageManager {
         // Traverse directories
         if let Ok(entries) = fs::read_dir(&base_path) {
             for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_dir() {
-                        // Check if directory matches timestamp pattern
-                        let name = entry.file_name();
-                        let name_str = name.to_string_lossy();
-                        // simplistic check
-                        if name_str.contains('_') {
-                            // Recursively check files
-                            if let Ok(chunk_entries) = fs::read_dir(entry.path()) {
-                                for chunk in chunk_entries.flatten() {
-                                    if let Ok(meta) = chunk.metadata() {
-                                        _total_size += meta.len();
-                                        files.push((
-                                            chunk.path(),
-                                            meta.modified().unwrap_or(SystemTime::now()),
-                                        ));
-                                    }
+                if entry.file_type().map(|f| f.is_dir()).unwrap_or(false) {
+                    // Check if directory matches timestamp pattern
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    // simplistic check
+                    if name_str.contains('_') {
+                        // Recursively check files
+                        if let Ok(chunk_entries) = fs::read_dir(entry.path()) {
+                            for chunk in chunk_entries.flatten() {
+                                if let Ok(meta) = chunk.metadata() {
+                                    _total_size += meta.len();
+                                    files.push((
+                                        chunk.path(),
+                                        meta.modified().unwrap_or(SystemTime::now()),
+                                    ));
                                 }
                             }
                         }
@@ -194,11 +198,9 @@ impl StorageManager {
         let mut results = Vec::new();
         if let Ok(entries) = fs::read_dir(&self.base_path) {
             for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    if let Ok(chunks) = fs::read_dir(entry.path()) {
-                        for chunk in chunks.flatten() {
-                            results.push(chunk.path());
-                        }
+                if let Ok(chunks) = fs::read_dir(entry.path()) {
+                    for chunk in chunks.flatten() {
+                        results.push(chunk.path());
                     }
                 }
             }

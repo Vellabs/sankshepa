@@ -99,10 +99,8 @@ impl IngestionServer {
                     let _ = reader.read_until(b'\n', &mut line_buf).await;
                     let data = String::from_utf8_lossy(&line_buf);
                     let trimmed = data.trim();
-                    if !trimmed.is_empty() {
-                        if let Ok(msg) = UnifiedParser::parse(trimmed) {
-                            let _ = tx.send(msg).await;
-                        }
+                    if let Ok(msg) = UnifiedParser::parse(trimmed) {
+                        let _ = tx.send(msg).await;
                     }
                 }
             }

@@ -16,6 +16,9 @@ use tokio::net::UdpSocket;
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::{debug, info};
 
+/// Type alias for the template request receiver
+pub type TemplateRx = mpsc::Receiver<(String, tokio::sync::oneshot::Sender<u32>)>;
+
 /// Extended cluster message types for AP replication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReplicationMessage {
@@ -107,10 +110,7 @@ impl GossipManager {
         config: GossipConfig,
         ext_template_tx: broadcast::Sender<(u32, String)>,
         ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
-    ) -> (
-        Self,
-        mpsc::Receiver<(String, tokio::sync::oneshot::Sender<u32>)>,
-    ) {
+    ) -> (Self, TemplateRx) {
         let (template_tx, template_rx) = mpsc::channel(100);
         let log = Arc::new(RwLock::new(ReplicationLog::new(node_id.clone())));
         let template_store = Arc::new(RwLock::new(CRDTTemplateStore::new(node_id.clone())));
@@ -143,10 +143,7 @@ impl GossipManager {
         ext_log_tx: broadcast::Sender<(u32, Vec<String>, i64)>,
         ext_template_tx: broadcast::Sender<(u32, String)>,
         log_path: &str,
-    ) -> anyhow::Result<(
-        Self,
-        mpsc::Receiver<(String, tokio::sync::oneshot::Sender<u32>)>,
-    )> {
+    ) -> anyhow::Result<(Self, TemplateRx)> {
         let (template_tx, template_rx) = mpsc::channel(100);
         let log = Arc::new(RwLock::new(ReplicationLog::with_persistence(
             node_id.clone(),
@@ -223,12 +220,12 @@ impl GossipManager {
         // Notify external listeners
         // info!("Added local template: {} -> {}", template_id, pattern);
         let _ = self.ext_template_tx.send((template_id, pattern));
-        
-        // Also gossip this new template immediately? 
+
+        // Also gossip this new template immediately?
         // Note: The caller (lib.rs template propagation task) receives the ID but doesn't have the log entry to gossip.
         // So we rely on the caller to not do anything, but who gossips it?
         // Ah, nobody gossips it immediately! The lib.rs just calls this and returns ID.
-        // It relies on Anti-Entropy or Polling? 
+        // It relies on Anti-Entropy or Polling?
         // WE SHOULD GOSSIP IT HERE if we had the socket, but we don't.
         // Alternatively, since we can't gossip here, we should ensure the Pull mechanism picks it up or we redesign to allow gossiping from here.
 
@@ -236,15 +233,12 @@ impl GossipManager {
     }
 
     pub async fn add_logs(&self, template_id: u32, variables: Vec<String>) -> LogEntry {
-        let entry = {
-            let mut log = self.log.write().await;
-            log.append(ReplicationOp::TemplateVariables {
-                template_id,
-                variables,
-                timestamp_ms: chrono::Utc::now().timestamp_millis(),
-            })
-        };
-        entry
+        let mut log = self.log.write().await;
+        log.append(ReplicationOp::TemplateVariables {
+            template_id,
+            variables,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        })
     }
 
     /// Handle incoming replication message.

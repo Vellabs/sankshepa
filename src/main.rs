@@ -145,7 +145,9 @@ fn query_logs(input: &str, template_id: Option<u32>, filter: Option<&str>) -> an
             .into_iter()
             .filter_map(|e| e.ok())
         {
-            if entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "lshrink") {
+            if entry.file_type().is_file()
+                && entry.path().extension().is_some_and(|ext| ext == "lshrink")
+            {
                 paths.push(entry.path().to_path_buf());
             }
         }
@@ -319,11 +321,9 @@ fn run_benchmark(
         for p in paths {
             let file = std::fs::File::open(p)?;
             let reader = std::io::BufReader::new(file);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    if !l.trim().is_empty() {
-                        lines.push(l);
-                    }
+            for l in reader.lines().map_while(Result::ok) {
+                if !l.trim().is_empty() {
+                    lines.push(l);
                 }
             }
         }
@@ -473,4 +473,3 @@ fn run_benchmark(
 
     Ok(())
 }
-

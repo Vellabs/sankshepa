@@ -62,14 +62,14 @@ impl UnifiedParser {
 
         // Fallback for non-compliant logs: Convert into a synthetic RFC 5424 message
         debug!("Non-RFC log detected, applying synthetic transformation");
-        
+
         // Try to identify if it's a LogHub-style message (Android) with a timestamp
         // Format: "12-18 15:28:53.604  9659  9724 D fingerprint: ..."
         let mut timestamp = None;
         if input.len() > 18 && input.chars().nth(2).is_some_and(|c| c == '-') {
-             // Basic attempt to see if start looks like date: MM-DD HH:MM:SS
-             // We'll just use current Utc but mark it as "parsed" if we had a real parser
-             timestamp = Some(Utc::now());
+            // Basic attempt to see if start looks like date: MM-DD HH:MM:SS
+            // We'll just use current Utc but mark it as "parsed" if we had a real parser
+            timestamp = Some(Utc::now());
         }
 
         Ok(SyslogMessage {

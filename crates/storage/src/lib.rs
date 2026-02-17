@@ -1,6 +1,6 @@
+pub mod backend;
 pub mod logshrink;
 pub mod manager;
-pub mod backend;
 
 use logshrink::{LogChunk, LogRecord, Template};
 pub use manager::StorageManager;
@@ -31,7 +31,8 @@ impl StorageEngine {
     pub fn save_chunk(mut chunk: LogChunk, path: &str) -> anyhow::Result<u64> {
         // Sort records by template_id then timestamp for better locality/compression
         chunk.records.sort_by(|a, b| {
-            a.template_id.cmp(&b.template_id)
+            a.template_id
+                .cmp(&b.template_id)
                 .then(a.timestamp.cmp(&b.timestamp))
         });
 
@@ -167,7 +168,6 @@ impl StorageEngine {
         Ok(chunk)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
