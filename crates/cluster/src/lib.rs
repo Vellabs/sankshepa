@@ -137,7 +137,10 @@ impl ClusterManager {
             ) {
                 Ok(gm) => gm,
                 Err(e) => {
-                    warn!("Failed to enable persistence at {}: {}. Falling back to non-persistent mode.", path, e);
+                    warn!(
+                        "Failed to enable persistence at {}: {}. Falling back to non-persistent mode.",
+                        path, e
+                    );
                     GossipManager::new(
                         node_id.clone(),
                         config,

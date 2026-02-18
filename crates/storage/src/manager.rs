@@ -3,8 +3,8 @@ use crate::logshrink::LogChunk;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 use tracing::info;
 
