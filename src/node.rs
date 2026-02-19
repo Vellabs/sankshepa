@@ -6,7 +6,6 @@ use sankshepa_storage::StorageManager;
 use sankshepa_storage::logshrink::LogChunk;
 use sankshepa_ui::{UiMessage, UiServer};
 use std::collections::HashMap;
-use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -125,7 +124,8 @@ impl Node {
         tokio::spawn(async move {
             let mut pending_logs: HashMap<u32, Vec<(Vec<String>, i64)>> =
                 if pending_logs_path.exists() {
-                    match fs::read(&pending_logs_path)
+                    match tokio::fs::read(&pending_logs_path)
+                        .await
                         .and_then(|b| postcard::from_bytes(&b).map_err(std::io::Error::other))
                     {
                         Ok(logs) => logs,
@@ -179,7 +179,7 @@ impl Node {
                                     }
                                     // Save updated pending logs
                                     if let Ok(bytes) = postcard::to_allocvec(&pending_logs) {
-                                        let _ = fs::write(&pending_logs_path, bytes);
+                                        let _ = tokio::fs::write(&pending_logs_path, bytes).await;
                                     }
                                 }
                             }
@@ -210,7 +210,7 @@ impl Node {
 
                                     // Periodic persistence (or every log for maximum durability)
                                     if let Ok(bytes) = postcard::to_allocvec(&pending_logs) {
-                                        let _ = fs::write(&pending_logs_path, bytes);
+                                        let _ = tokio::fs::write(&pending_logs_path, bytes).await;
                                     }
                                 } else if let Some(msg) =
                                     Self::reconstruct_cluster_log(tid, vars, ts, &template_map_clone)
@@ -321,19 +321,38 @@ impl Node {
         // Resolve all local templates to Global IDs
         for (pattern, &local_id) in &chunk.templates {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            if cluster_tx.send((pattern.clone(), tx)).await.is_ok()
-                && let Ok(global_id) = rx.await
-            {
-                local_to_global.insert(local_id, global_id);
+            if let Err(e) = cluster_tx.send((pattern.clone(), tx)).await {
+                warn!(
+                    "Failed to send template '{}' for global ID resolution: {}",
+                    pattern, e
+                );
+                continue;
+            }
+
+            match rx.await {
+                Ok(global_id) => {
+                    local_to_global.insert(local_id, global_id);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to receive global ID for template '{}': {}",
+                        pattern, e
+                    );
+                }
             }
         }
 
         for record in &chunk.records {
             variable_count += record.variables.len();
-            if let Some(&global_id) = local_to_global.get(&record.template_id) {
-                let _ = cluster_log_sender
+            if let Some(&global_id) = local_to_global.get(&record.template_id)
+                && let Err(e) = cluster_log_sender
                     .send((global_id, record.variables.clone()))
-                    .await;
+                    .await
+            {
+                warn!(
+                    "Failed to send replicated log for global template ID {}: {}",
+                    global_id, e
+                );
             }
         }
 

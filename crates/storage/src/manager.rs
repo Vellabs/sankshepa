@@ -3,6 +3,8 @@ use crate::logshrink::LogChunk;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 use tracing::info;
 
@@ -14,6 +16,8 @@ pub struct StorageManager {
     // Retention period in hours
     retention_hours: u64,
     backend: Box<dyn StorageBackend>,
+    // Flag to prevent concurrent retention runs
+    retention_running: Arc<AtomicBool>,
 }
 
 impl StorageManager {
@@ -53,6 +57,7 @@ impl StorageManager {
             max_size_bytes,
             retention_hours,
             backend,
+            retention_running: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -102,14 +107,22 @@ impl StorageManager {
     }
 
     /// Enforce retention properties (size and age)
+    /// Uses a flag to prevent concurrent runs and avoid spawning unbounded threads
     pub fn enforce_retention(&self) {
+        // Check if retention is already running; if so, skip this call
+        if self.retention_running.swap(true, Ordering::Acquire) {
+            return; // Already running
+        }
+
         let base = self.base_path.clone();
         let retention = self.retention_hours;
         let max_size = self.max_size_bytes;
+        let flag = self.retention_running.clone();
 
         // Run in background to avoid blocking write
         std::thread::spawn(move || {
             Self::rotate(base, retention, max_size);
+            flag.store(false, Ordering::Release);
         });
     }
 

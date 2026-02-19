@@ -14,7 +14,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "data")]
 pub enum UiMessage {
     Log(SyslogMessage),
     Stats {

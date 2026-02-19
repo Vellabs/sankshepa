@@ -29,8 +29,8 @@ pub enum ReplicationMessage {
         template_count: u32,
         log_length: usize,
     },
-    /// New template notification with full entry
-    NewTemplate { entry: LogEntry },
+    /// Replicated log entry (templates, variables, etc.)
+    ReplicationEntry { entry: LogEntry },
     /// Request log entries after a vector clock
     PullRequest {
         from_node: String,
@@ -295,7 +295,7 @@ impl GossipManager {
                 }
             }
 
-            ReplicationMessage::NewTemplate { entry } => {
+            ReplicationMessage::ReplicationEntry { entry } => {
                 debug!("Received new template from {}", entry.origin_node);
 
                 // Apply to log
@@ -491,7 +491,7 @@ impl GossipManager {
         exclude: Option<SocketAddr>,
     ) -> anyhow::Result<()> {
         let peers = self.peers.read().await;
-        let msg = ReplicationMessage::NewTemplate { entry };
+        let msg = ReplicationMessage::ReplicationEntry { entry };
 
         let mut sent = 0;
         for (addr, _) in peers.iter() {

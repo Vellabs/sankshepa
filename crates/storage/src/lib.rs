@@ -6,6 +6,7 @@ use logshrink::{LogChunk, LogRecord, Template};
 pub use manager::StorageManager;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 use zstd::stream::{decode_all, encode_all};
 
 #[derive(Serialize, Deserialize)]
@@ -114,8 +115,8 @@ impl StorageEngine {
         Ok(postcard::from_bytes(&decompressed)?)
     }
 
-    pub fn load_chunk(path: &str) -> anyhow::Result<LogChunk> {
-        let buf = fs::read(path)?;
+    pub fn load_chunk(path: impl AsRef<Path>) -> anyhow::Result<LogChunk> {
+        let buf = fs::read(path.as_ref())?;
         let compressed: CompressedChunk = postcard::from_bytes(&buf)?;
 
         let delta_ts: Vec<i64> = Self::decompress(&compressed.timestamp_block)?;
