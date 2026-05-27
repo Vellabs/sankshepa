@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 pub struct IngestionServer {
     udp_addr: String,
     tcp_addr: String,
-    beep_addr: String,
+    _beep_addr: String,
     tx: mpsc::Sender<SyslogMessage>,
 }
 
@@ -21,28 +21,17 @@ impl IngestionServer {
         Self {
             udp_addr,
             tcp_addr,
-            beep_addr,
+            _beep_addr: beep_addr,
             tx,
         }
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
-        tokio::try_join!(
-            Self::run_udp(self.udp_addr, self.tx.clone()),
-            Self::run_tcp(self.tcp_addr, self.tx.clone()),
-            Self::run_beep(self.beep_addr, self.tx)
-        )?;
-        Ok(())
-    }
+        let udp = Self::run_udp(self.udp_addr, self.tx.clone());
+        let tcp = Self::run_tcp(self.tcp_addr, self.tx.clone());
 
-    async fn run_beep(addr: String, _tx: mpsc::Sender<SyslogMessage>) -> anyhow::Result<()> {
-        info!("BEEP listener (RFC 3195) started on {} [STUB]", addr);
-        // BEEP implementation would go here.
-        // For now, we just keep the port open.
-        let listener = TcpListener::bind(&addr).await?;
-        loop {
-            let _ = listener.accept().await?;
-        }
+        tokio::try_join!(udp, tcp)?;
+        Ok(())
     }
 
     async fn run_udp(addr: String, tx: mpsc::Sender<SyslogMessage>) -> anyhow::Result<()> {
@@ -53,18 +42,13 @@ impl IngestionServer {
         loop {
             let (len, _) = socket.recv_from(&mut buf).await?;
             let data = String::from_utf8_lossy(&buf[..len]);
-            debug!("UDP received: {}", data.trim());
-            match UnifiedParser::parse(&data) {
-                Ok(msg) => {
-                    let _ = tx.send(msg).await;
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to parse UDP message: {} | Error: {}",
-                        data.trim(),
-                        e
-                    );
-                }
+            let trimmed = data.trim();
+            debug!("UDP received: {}", trimmed);
+
+            if let Ok(msg) = UnifiedParser::parse(trimmed) {
+                let _ = tx.send(msg).await;
+            } else if !trimmed.is_empty() {
+                warn!("Failed to parse UDP message: {}", trimmed);
             }
         }
     }
@@ -76,82 +60,99 @@ impl IngestionServer {
         loop {
             let (socket, _) = listener.accept().await?;
             let tx_clone = tx.clone();
+
             tokio::spawn(async move {
                 let mut reader = BufReader::new(socket);
-
-                loop {
-                    let mut first_byte = [0u8; 1];
-                    if reader.read_exact(&mut first_byte).await.is_err() {
-                        break;
-                    }
-
-                    if first_byte[0].is_ascii_digit() {
-                        // Octet Counting
-                        let mut len_bytes = vec![first_byte[0]];
-                        loop {
-                            let mut b = [0u8; 1];
-                            if reader.read_exact(&mut b).await.is_err() {
-                                break;
-                            }
-                            if b[0] == b' ' {
-                                break;
-                            }
-                            len_bytes.push(b[0]);
-                        }
-                        if let Some(len) = String::from_utf8(len_bytes)
-                            .ok()
-                            .and_then(|s| s.parse::<usize>().ok())
-                        {
-                            let mut msg_buf = vec![0u8; len];
-                            if reader.read_exact(&mut msg_buf).await.is_ok() {
-                                let data = String::from_utf8_lossy(&msg_buf);
-                                debug!("TCP (Octet) received: {}", data.trim());
-                                match UnifiedParser::parse(&data) {
-                                    Ok(msg) => {
-                                        let _ = tx_clone.send(msg).await;
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Failed to parse TCP message: {} | Error: {}",
-                                            data.trim(),
-                                            e
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    } else if first_byte[0] == b'<' {
-                        // Non-Transparent Framing (likely starting with <PRI>)
-                        // Read until LF
-                        let mut msg_bytes = vec![first_byte[0]];
-                        let mut line = Vec::new();
-                        if reader.read_until(b'\n', &mut line).await.is_ok() {
-                            msg_bytes.extend(line);
-                            let data = String::from_utf8_lossy(&msg_bytes);
-                            debug!("TCP (Delimited) received: {}", data.trim());
-                            match UnifiedParser::parse(data.trim_end()) {
-                                Ok(msg) => {
-                                    let _ = tx_clone.send(msg).await;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "Failed to parse TCP message: {} | Error: {}",
-                                        data.trim(),
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    } else if first_byte[0] == b'\n' || first_byte[0] == b'\r' {
-                        // Skip empty lines
-                        continue;
-                    } else {
-                        // Just consume the rest of the line if it's junk
-                        let mut junk = Vec::new();
-                        let _ = reader.read_until(b'\n', &mut junk).await;
-                    }
-                }
+                let _ = Self::handle_tcp_client(&mut reader, tx_clone).await;
             });
         }
+    }
+
+    async fn handle_tcp_client(
+        reader: &mut BufReader<tokio::net::TcpStream>,
+        tx: mpsc::Sender<SyslogMessage>,
+    ) -> anyhow::Result<()> {
+        loop {
+            let mut first_byte = [0u8; 1];
+            if reader.read_exact(&mut first_byte).await.is_err() {
+                break;
+            }
+
+            match first_byte[0] {
+                b'0'..=b'9' => {
+                    // Octet Counting (RFC 6587)
+                    if let Some(msg) = Self::read_octet_counted(reader, first_byte[0]).await? {
+                        let _ = tx.send(msg).await;
+                    }
+                }
+                b'<' => {
+                    // Non-Transparent Framing
+                    if let Some(msg) = Self::read_delimited(reader, first_byte[0]).await? {
+                        let _ = tx.send(msg).await;
+                    }
+                }
+                b'\n' | b'\r' => continue,
+                _ => {
+                    // Non-standard framing: Read until newline and attempt to parse
+                    let mut line_buf = Vec::new();
+                    line_buf.push(first_byte[0]);
+                    let _ = reader.read_until(b'\n', &mut line_buf).await;
+                    let data = String::from_utf8_lossy(&line_buf);
+                    let trimmed = data.trim();
+                    if let Ok(msg) = UnifiedParser::parse(trimmed) {
+                        let _ = tx.send(msg).await;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn read_octet_counted(
+        reader: &mut BufReader<tokio::net::TcpStream>,
+        first_digit: u8,
+    ) -> anyhow::Result<Option<SyslogMessage>> {
+        let mut len_bytes = vec![first_digit];
+        loop {
+            let mut b = [0u8; 1];
+            reader.read_exact(&mut b).await?;
+            if b[0] == b' ' {
+                break;
+            }
+            len_digit(&mut len_bytes, b[0])?;
+        }
+
+        let len_str = String::from_utf8(len_bytes)?;
+        let len = len_str.parse::<usize>()?;
+
+        let mut msg_buf = vec![0u8; len];
+        reader.read_exact(&mut msg_buf).await?;
+
+        let data = String::from_utf8_lossy(&msg_buf);
+        debug!("TCP (Octet) received: {}", data.trim());
+        Ok(UnifiedParser::parse(&data).ok())
+    }
+
+    async fn read_delimited(
+        reader: &mut BufReader<tokio::net::TcpStream>,
+        first_char: u8,
+    ) -> anyhow::Result<Option<SyslogMessage>> {
+        let mut msg_bytes = vec![first_char];
+        let mut line = Vec::new();
+        reader.read_until(b'\n', &mut line).await?;
+        msg_bytes.extend(line);
+
+        let data = String::from_utf8_lossy(&msg_bytes);
+        debug!("TCP (Delimited) received: {}", data.trim());
+        Ok(UnifiedParser::parse(data.trim()).ok())
+    }
+}
+
+fn len_digit(len_bytes: &mut Vec<u8>, b: u8) -> anyhow::Result<()> {
+    if b.is_ascii_digit() {
+        len_bytes.push(b);
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Invalid digit in octet length"))
     }
 }

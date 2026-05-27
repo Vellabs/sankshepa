@@ -9,9 +9,11 @@ A high-performance Syslog Collector and Generator with **LogShrink** storage for
 ## Key Features
 - **Multi-Protocol**: Supports RFC 3164 (BSD), RFC 5424 (Structured), and RFC 6587 (TCP Framing).
 - **Realtime Dashboard**: Built-in Axum-based web UI with SSE (Server-Sent Events) for live log monitoring.
-- **LogShrink Storage**: Deduplicates logs by extracting static templates and dynamic variables into a columnar binary format (`.lshrink`).
-- **Modular Architecture**: Organized as a Rust workspace with clean separation between Protocol, Storage, Ingestion, and UI.
-- **Efficient Compression**: Uses Delta-encoding for timestamps and Zstd for columnar blocks.
+- **LogShrink Storage**: Deduplicates logs by extracting static templates and dynamic variables into a columnar binary format with nanosecond precision.
+- **Distributed Architecture**: Multi-node AP clustering with eventual consistency for log templates.
+- **Durable Buffering**: Unknown log templates are buffered to disk locally to prevent data loss during cluster partitions.
+- **Recursive Querying**: Query logs across entire time-bucketed directory structures.
+- **Modular Storage**: Pluggable backends for local filesystem and cloud storage (Mock implementation included).
 
 ## Project Structure
 - `crates/protocol`: High-performance `nom` parsers for syslog.
@@ -36,7 +38,8 @@ cargo build --release
 ### Start Collector
 ```bash
 # Starts syslog listeners and the Web UI on http://127.0.0.1:8080
-./target/release/sankshepa serve --output production.lshrink
+# Output is now a directory structure: data/YYYY-MM-DD_HH/chunk_...
+./target/release/sankshepa serve --output ./data
 ```
 
 ### High Availability Cluster
@@ -44,10 +47,10 @@ Sankshepa supports AP (Available / Partition-tolerant) clustering to synchronize
 
 ```bash
 # Node 1
-./target/release/sankshepa serve --node-id node-1 --cluster-addr 127.0.0.1:1701 --output node1.lshrink
+./target/release/sankshepa serve --node-id node-1 --cluster-addr 127.0.0.1:1701 --output ./node1_data
 
 # Node 2 (connecting to Node 1)
-./target/release/sankshepa serve --node-id node-2 --cluster-addr 127.0.0.1:1702 --peers 127.0.0.1:1701 --output node2.lshrink
+./target/release/sankshepa serve --node-id node-2 --cluster-addr 127.0.0.1:1702 --peers 127.0.0.1:1701 --output ./node2_data
 ```
 
 ### Benchmarking Storage Gains
@@ -63,9 +66,11 @@ Sankshepa supports AP (Available / Partition-tolerant) clustering to synchronize
 
 ### Query & Reconstruct Logs
 ```bash
-./target/release/sankshepa query --input production.lshrink
-# Filter by template ID
-./target/release/sankshepa query --input production.lshrink --template-id 0
+# Recursively scan a directory of .lshrink chunks
+./target/release/sankshepa query --input ./data
+
+# Filter by template ID across all files in the directory
+./target/release/sankshepa query --input ./data --template-id 0
 ```
 
 ## Testing

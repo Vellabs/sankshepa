@@ -1,0 +1,66 @@
+version: "3.8"
+
+services:
+  node-1:
+    build: .
+    container_name: sankshepa-node-1
+    command: >
+      serve 
+      --node-id node-1 
+      --output /data/node1/logs.lshrink
+    ports:
+      - "1514:1514/udp"
+      - "1514:1514/tcp"
+      - "1601:1601"
+      - "8080:8080"
+      - "1701:1701/udp"
+    volumes:
+      - ./data:/data
+    networks:
+      - sankshepa-cluster
+
+  node-2:
+    build: .
+    container_name: sankshepa-node-2
+    depends_on:
+      - node-1
+    command: >
+      serve 
+      --node-id node-2 
+      --peers node-1:1701 
+      --output /data/node2/logs.lshrink
+    ports:
+      - "1515:1514/udp"
+      - "1515:1514/tcp"
+      - "1602:1601"
+      - "8081:8080"
+      - "1702:1701/udp"
+    volumes:
+      - ./data:/data
+    networks:
+      - sankshepa-cluster
+
+  node-3:
+    build: .
+    container_name: sankshepa-node-3
+    depends_on:
+      - node-1
+    command: >
+      serve 
+      --node-id node-3 
+      --peers node-1:1701 
+      --output /data/node3/logs.lshrink
+    ports:
+      - "1516:1514/udp"
+      - "1516:1514/tcp"
+      - "1603:1601"
+      - "8082:8080"
+      - "1703:1701/udp"
+    volumes:
+      - ./data:/data
+    networks:
+      - sankshepa-cluster
+
+networks:
+  sankshepa-cluster:
+    driver: bridge

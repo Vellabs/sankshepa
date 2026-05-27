@@ -86,4 +86,59 @@ mod tests {
         );
         assert!(!msg.is_rfc5424);
     }
+
+    #[test]
+    fn test_parse_rfc3164_priority_zero() {
+        let raw = "<0>Jan  1 00:00:00 host kernel: boot";
+        let msg = RFC3164Parser::parse(raw).unwrap();
+        assert_eq!(msg.priority, 0);
+        assert_eq!(msg.facility, 0);
+        assert_eq!(msg.severity, 0);
+    }
+
+    #[test]
+    fn test_parse_rfc3164_high_priority() {
+        let raw = "<191>Dec 31 23:59:59 host proc: message";
+        let msg = RFC3164Parser::parse(raw).unwrap();
+        assert_eq!(msg.priority, 191);
+        assert_eq!(msg.facility, 23); // 191 >> 3 = 23
+        assert_eq!(msg.severity, 7); // 191 & 7 = 7
+    }
+
+    #[test]
+    fn test_parse_rfc3164_multiword_message() {
+        let raw = "<13>Feb 28 12:00:00 myserver sshd: Connection from 10.0.0.1 port 22 rejected";
+        let msg = RFC3164Parser::parse(raw).unwrap();
+        assert_eq!(msg.hostname, Some("myserver".to_string()));
+        assert_eq!(
+            msg.message,
+            "sshd: Connection from 10.0.0.1 port 22 rejected"
+        );
+    }
+
+    #[test]
+    fn test_parse_rfc3164_sets_timestamp() {
+        let raw = "<34>Oct 11 22:14:15 host message";
+        let msg = RFC3164Parser::parse(raw).unwrap();
+        assert!(msg.timestamp.is_some());
+    }
+
+    #[test]
+    fn test_parse_rfc3164_is_not_rfc5424() {
+        let raw = "<34>Oct 11 22:14:15 host message";
+        let msg = RFC3164Parser::parse(raw).unwrap();
+        assert!(!msg.is_rfc5424);
+    }
+
+    #[test]
+    fn test_parse_rfc3164_invalid_input() {
+        let raw = "not a valid syslog message";
+        assert!(RFC3164Parser::parse(raw).is_err());
+    }
+
+    #[test]
+    fn test_parse_rfc3164_missing_bracket() {
+        let raw = "34>Oct 11 22:14:15 host message";
+        assert!(RFC3164Parser::parse(raw).is_err());
+    }
 }

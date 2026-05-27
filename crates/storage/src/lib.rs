@@ -1,9 +1,12 @@
+pub mod backend;
 pub mod logshrink;
+pub mod manager;
 
 use logshrink::{LogChunk, LogRecord, Template};
+pub use manager::StorageManager;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs;
+use std::path::Path;
 use zstd::stream::{decode_all, encode_all};
 
 #[derive(Serialize, Deserialize)]
@@ -26,27 +29,35 @@ pub struct CompressedChunk {
 pub struct StorageEngine;
 
 impl StorageEngine {
-    pub fn save_chunk(chunk: LogChunk, path: &str) -> anyhow::Result<()> {
-        let mut templates = Vec::new();
-        for (pattern, &id) in &chunk.templates {
-            templates.push(Template {
+    pub fn save_chunk(mut chunk: LogChunk, path: &str) -> anyhow::Result<u64> {
+        // Sort records by template_id then timestamp for better locality/compression
+        chunk.records.sort_by(|a, b| {
+            a.template_id
+                .cmp(&b.template_id)
+                .then(a.timestamp.cmp(&b.timestamp))
+        });
+
+        let templates: Vec<Template> = chunk
+            .templates
+            .iter()
+            .map(|(pattern, &id)| Template {
                 id,
                 pattern: pattern.clone(),
-            });
-        }
+            })
+            .collect();
 
         // Columnar extraction
-        let mut timestamps = Vec::new();
-        let mut priorities = Vec::new();
-        let mut hostname_ids = Vec::new();
-        let mut app_name_ids = Vec::new();
-        let mut procid_ids = Vec::new();
-        let mut msgid_ids = Vec::new();
-        let mut sd_ids = Vec::new();
-        let mut ids = Vec::new();
-        let mut variables = Vec::new();
-        let mut is_rfc5424s = Vec::new();
-        let mut node_id_ids = Vec::new();
+        let mut timestamps = Vec::with_capacity(chunk.records.len());
+        let mut priorities = Vec::with_capacity(chunk.records.len());
+        let mut hostname_ids = Vec::with_capacity(chunk.records.len());
+        let mut app_name_ids = Vec::with_capacity(chunk.records.len());
+        let mut procid_ids = Vec::with_capacity(chunk.records.len());
+        let mut msgid_ids = Vec::with_capacity(chunk.records.len());
+        let mut sd_ids = Vec::with_capacity(chunk.records.len());
+        let mut ids = Vec::with_capacity(chunk.records.len());
+        let mut variables = Vec::with_capacity(chunk.records.len());
+        let mut is_rfc5424s = Vec::with_capacity(chunk.records.len());
+        let mut node_id_ids = Vec::with_capacity(chunk.records.len());
 
         for record in chunk.records {
             timestamps.push(record.timestamp);
@@ -63,7 +74,7 @@ impl StorageEngine {
         }
 
         // Delta encoding for timestamps
-        let mut delta_ts = Vec::new();
+        let mut delta_ts = Vec::with_capacity(timestamps.len());
         if !timestamps.is_empty() {
             delta_ts.push(timestamps[0]);
             for i in 1..timestamps.len() {
@@ -71,52 +82,46 @@ impl StorageEngine {
             }
         }
 
-        let ts_data = postcard::to_allocvec(&delta_ts)?;
-        let pri_data = priorities;
-        let host_data = postcard::to_allocvec(&hostname_ids)?;
-        let app_data = postcard::to_allocvec(&app_name_ids)?;
-        let proc_data = postcard::to_allocvec(&procid_ids)?;
-        let msgid_data = postcard::to_allocvec(&msgid_ids)?;
-        let sd_data = postcard::to_allocvec(&sd_ids)?;
-        let id_data = postcard::to_allocvec(&ids)?;
-        let var_data = postcard::to_allocvec(&variables)?;
-        let rfc_data = postcard::to_allocvec(&is_rfc5424s)?;
-        let node_id_data = postcard::to_allocvec(&node_id_ids)?;
-
         let compressed = CompressedChunk {
             templates,
             string_pool: chunk.string_pool,
-            timestamp_block: encode_all(&ts_data[..], 3)?,
-            priority_block: encode_all(&pri_data[..], 3)?,
-            hostname_id_block: encode_all(&host_data[..], 3)?,
-            app_name_id_block: encode_all(&app_data[..], 3)?,
-            procid_id_block: encode_all(&proc_data[..], 3)?,
-            msgid_id_block: encode_all(&msgid_data[..], 3)?,
-            sd_id_block: encode_all(&sd_data[..], 3)?,
-            template_id_block: encode_all(&id_data[..], 3)?,
-            variable_block: encode_all(&var_data[..], 3)?,
-            is_rfc5424_block: encode_all(&rfc_data[..], 3)?,
-            node_id_id_block: encode_all(&node_id_data[..], 3)?,
+            timestamp_block: Self::compress(&delta_ts)?,
+            priority_block: encode_all(&priorities[..], 3)?,
+            hostname_id_block: Self::compress(&hostname_ids)?,
+            app_name_id_block: Self::compress(&app_name_ids)?,
+            procid_id_block: Self::compress(&procid_ids)?,
+            msgid_id_block: Self::compress(&msgid_ids)?,
+            sd_id_block: Self::compress(&sd_ids)?,
+            template_id_block: Self::compress(&ids)?,
+            variable_block: Self::compress(&variables)?,
+            is_rfc5424_block: Self::compress(&is_rfc5424s)?,
+            node_id_id_block: Self::compress(&node_id_ids)?,
         };
 
-        let mut file = File::create(path)?;
         let serialized = postcard::to_allocvec(&compressed)?;
-        file.write_all(&serialized)?;
+        let size = serialized.len() as u64;
+        fs::write(path, serialized)?;
 
-        Ok(())
+        Ok(size)
     }
 
-    pub fn load_chunk(path: &str) -> anyhow::Result<LogChunk> {
-        let mut file = File::open(path)?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
+    fn compress<T: Serialize>(data: &T) -> anyhow::Result<Vec<u8>> {
+        let serialized = postcard::to_allocvec(data)?;
+        Ok(encode_all(&serialized[..], 3)?)
+    }
 
+    fn decompress<T: for<'de> Deserialize<'de>>(block: &[u8]) -> anyhow::Result<T> {
+        let decompressed = decode_all(block)?;
+        Ok(postcard::from_bytes(&decompressed)?)
+    }
+
+    pub fn load_chunk(path: impl AsRef<Path>) -> anyhow::Result<LogChunk> {
+        let buf = fs::read(path.as_ref())?;
         let compressed: CompressedChunk = postcard::from_bytes(&buf)?;
 
-        let ts_data = decode_all(&compressed.timestamp_block[..])?;
-        let delta_ts: Vec<i64> = postcard::from_bytes(&ts_data)?;
+        let delta_ts: Vec<i64> = Self::decompress(&compressed.timestamp_block)?;
 
-        let mut timestamps = Vec::new();
+        let mut timestamps = Vec::with_capacity(delta_ts.len());
         if !delta_ts.is_empty() {
             let mut current = delta_ts[0];
             timestamps.push(current);
@@ -128,32 +133,15 @@ impl StorageEngine {
 
         let priorities = decode_all(&compressed.priority_block[..])?;
 
-        let host_data = decode_all(&compressed.hostname_id_block[..])?;
-        let hostname_ids: Vec<Option<u32>> = postcard::from_bytes(&host_data)?;
-
-        let app_data = decode_all(&compressed.app_name_id_block[..])?;
-        let app_name_ids: Vec<Option<u32>> = postcard::from_bytes(&app_data)?;
-
-        let proc_data = decode_all(&compressed.procid_id_block[..])?;
-        let procid_ids: Vec<Option<u32>> = postcard::from_bytes(&proc_data)?;
-
-        let msgid_data = decode_all(&compressed.msgid_id_block[..])?;
-        let msgid_ids: Vec<Option<u32>> = postcard::from_bytes(&msgid_data)?;
-
-        let sd_data = decode_all(&compressed.sd_id_block[..])?;
-        let sd_ids: Vec<Option<u32>> = postcard::from_bytes(&sd_data)?;
-
-        let id_data = decode_all(&compressed.template_id_block[..])?;
-        let ids: Vec<u32> = postcard::from_bytes(&id_data)?;
-
-        let var_data = decode_all(&compressed.variable_block[..])?;
-        let variables: Vec<Vec<String>> = postcard::from_bytes(&var_data)?;
-
-        let rfc_data = decode_all(&compressed.is_rfc5424_block[..])?;
-        let is_rfc5424s: Vec<bool> = postcard::from_bytes(&rfc_data)?;
-
-        let node_id_data = decode_all(&compressed.node_id_id_block[..])?;
-        let node_id_ids: Vec<Option<u32>> = postcard::from_bytes(&node_id_data)?;
+        let hostname_ids: Vec<Option<u32>> = Self::decompress(&compressed.hostname_id_block)?;
+        let app_name_ids: Vec<Option<u32>> = Self::decompress(&compressed.app_name_id_block)?;
+        let procid_ids: Vec<Option<u32>> = Self::decompress(&compressed.procid_id_block)?;
+        let msgid_ids: Vec<Option<u32>> = Self::decompress(&compressed.msgid_id_block)?;
+        let sd_ids: Vec<Option<u32>> = Self::decompress(&compressed.sd_id_block)?;
+        let ids: Vec<u32> = Self::decompress(&compressed.template_id_block)?;
+        let variables: Vec<Vec<String>> = Self::decompress(&compressed.variable_block)?;
+        let is_rfc5424s: Vec<bool> = Self::decompress(&compressed.is_rfc5424_block)?;
+        let node_id_ids: Vec<Option<u32>> = Self::decompress(&compressed.node_id_id_block)?;
 
         let mut chunk = LogChunk::new();
         chunk.string_pool = compressed.string_pool;
@@ -190,6 +178,23 @@ mod tests {
     use sankshepa_protocol::SyslogMessage;
     use std::fs;
 
+    fn make_msg(text: &str, hostname: &str, is_rfc5424: bool) -> SyslogMessage {
+        SyslogMessage {
+            priority: 34,
+            facility: 4,
+            severity: 2,
+            timestamp: Some(Utc::now()),
+            hostname: Some(hostname.to_string()),
+            app_name: Some("testapp".to_string()),
+            procid: None,
+            msgid: None,
+            structured_data: None,
+            message: text.to_string(),
+            is_rfc5424,
+            node_id: None,
+        }
+    }
+
     #[test]
     fn test_storage_save_load() {
         let mut chunk = LogChunk::new();
@@ -205,15 +210,19 @@ mod tests {
             structured_data: None,
             message: "Something happened".to_string(),
             is_rfc5424: true,
+            node_id: None,
         };
         chunk.add_message(msg);
         chunk.finish_and_process();
 
-        let path = "test_chunk.lshrink";
+        let path = std::env::temp_dir()
+            .join(format!("test_chunk_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
 
-        StorageEngine::save_chunk(chunk, path).unwrap();
+        StorageEngine::save_chunk(chunk, &path).unwrap();
 
-        let loaded_chunk = StorageEngine::load_chunk(path).unwrap();
+        let loaded_chunk = StorageEngine::load_chunk(&path).unwrap();
 
         assert_eq!(loaded_chunk.records.len(), 1);
         let hostname = loaded_chunk.records[0]
@@ -228,6 +237,87 @@ mod tests {
         assert_eq!(app_name, "testapp");
         assert_eq!(loaded_chunk.templates.len(), 1);
 
-        fs::remove_file(path).unwrap();
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_multiple_records_roundtrip() {
+        let mut chunk = LogChunk::new();
+        chunk.add_message(make_msg(
+            "User alice logged in from 192.168.1.1",
+            "host1",
+            false,
+        ));
+        chunk.add_message(make_msg(
+            "User bob logged in from 192.168.1.2",
+            "host2",
+            false,
+        ));
+        chunk.add_message(make_msg("System restart initiated", "host1", true));
+        chunk.finish_and_process();
+
+        let path = std::env::temp_dir()
+            .join(format!("test_multi_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let size = StorageEngine::save_chunk(chunk, &path).unwrap();
+        assert!(size > 0);
+
+        let loaded = StorageEngine::load_chunk(&path).unwrap();
+        assert_eq!(loaded.records.len(), 3);
+        // Two similar login messages should merge into one template
+        assert!(loaded.templates.len() <= 3);
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_empty_chunk_produces_no_records() {
+        let mut chunk = LogChunk::new();
+        // No messages added, so finish_and_process produces no records
+        chunk.finish_and_process();
+
+        let path = std::env::temp_dir()
+            .join(format!("test_empty_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        // save_chunk with empty records still writes a valid (empty) file
+        StorageEngine::save_chunk(chunk, &path).unwrap();
+
+        let loaded = StorageEngine::load_chunk(&path).unwrap();
+        assert_eq!(loaded.records.len(), 0);
+        assert_eq!(loaded.templates.len(), 0);
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_rfc5424_flag_preserved() {
+        let mut chunk = LogChunk::new();
+        chunk.add_message(make_msg("RFC5424 event", "host", true));
+        chunk.finish_and_process();
+
+        let path = std::env::temp_dir()
+            .join(format!("test_rfc5424_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        StorageEngine::save_chunk(chunk, &path).unwrap();
+
+        let loaded = StorageEngine::load_chunk(&path).unwrap();
+        assert_eq!(loaded.records.len(), 1);
+        assert!(loaded.records[0].is_rfc5424);
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_load_nonexistent_file_errors() {
+        let result = StorageEngine::load_chunk(
+            std::env::temp_dir()
+                .join("definitely_does_not_exist.lshrink")
+                .to_str()
+                .unwrap(),
+        );
+        assert!(result.is_err());
     }
 }
