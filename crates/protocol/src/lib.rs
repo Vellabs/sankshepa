@@ -88,3 +88,66 @@ impl UnifiedParser {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_input_returns_error() {
+        assert!(UnifiedParser::parse("").is_err());
+        assert!(UnifiedParser::parse("   ").is_err());
+    }
+
+    #[test]
+    fn test_rfc5424_dispatch() {
+        let input = "<34>1 2003-10-11T22:14:15.003Z myhost myapp 1234 ID47 - RFC5424 message";
+        let msg = UnifiedParser::parse(input).unwrap();
+        assert!(msg.is_rfc5424);
+        assert_eq!(msg.message, "RFC5424 message");
+        assert_eq!(msg.hostname.unwrap(), "myhost");
+    }
+
+    #[test]
+    fn test_rfc3164_dispatch() {
+        let input = "<34>Oct 11 22:14:15 mymachine su: failed";
+        let msg = UnifiedParser::parse(input).unwrap();
+        assert!(!msg.is_rfc5424);
+        assert_eq!(msg.hostname.unwrap(), "mymachine");
+    }
+
+    #[test]
+    fn test_non_rfc_fallback() {
+        let input = "some arbitrary log line that is not RFC compliant at all";
+        let msg = UnifiedParser::parse(input).unwrap();
+        // Fallback produces a synthetic message with the full input as message
+        assert_eq!(msg.message, input);
+        assert_eq!(msg.priority, 13);
+        assert_eq!(msg.hostname.unwrap(), "log-transformed");
+    }
+
+    #[test]
+    fn test_loghub_android_prefix_stripped() {
+        // "path/file.log:12345: <actual log>"
+        let input = "loghub/Android.log:1210639: <34>Oct 11 22:14:15 host message";
+        let msg = UnifiedParser::parse(input).unwrap();
+        // After stripping the prefix, the RFC 3164 part should parse
+        assert_eq!(msg.hostname.unwrap(), "host");
+        assert_eq!(msg.message, "message");
+    }
+
+    #[test]
+    fn test_whitespace_trimmed() {
+        let input = "   <34>Oct 11 22:14:15 host msg   ";
+        let msg = UnifiedParser::parse(input).unwrap();
+        assert_eq!(msg.hostname.unwrap(), "host");
+    }
+
+    #[test]
+    fn test_android_style_timestamp_detected() {
+        // Starts with MM-DD pattern -> timestamp set
+        let input = "12-18 15:28:53.604  9659  9724 D fingerprint: acquired";
+        let msg = UnifiedParser::parse(input).unwrap();
+        assert!(msg.timestamp.is_some());
+    }
+}

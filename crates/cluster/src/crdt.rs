@@ -413,6 +413,20 @@ mod tests {
     }
 
     #[test]
+    fn test_gset_idempotent() {
+        let mut set = GSet::new();
+        set.add("a".to_string());
+        set.add("a".to_string());
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn test_gset_is_empty() {
+        let set: GSet<String> = GSet::new();
+        assert!(set.is_empty());
+    }
+
+    #[test]
     fn test_lww_register() {
         let mut reg1 = LWWRegister::new("value1".to_string(), "node1".to_string());
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -420,6 +434,17 @@ mod tests {
 
         reg1.merge(&reg2);
         assert_eq!(reg1.get(), "value2");
+    }
+
+    #[test]
+    fn test_lww_register_older_value_not_overwritten() {
+        let reg_new = LWWRegister::new("new_value".to_string(), "node2".to_string());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let mut reg_old = LWWRegister::new("old_value".to_string(), "node1".to_string());
+
+        // reg_old is newer (created after reg_new), merging reg_new should not overwrite
+        reg_old.merge(&reg_new);
+        assert_eq!(reg_old.get(), "old_value");
     }
 
     #[test]
@@ -435,5 +460,133 @@ mod tests {
         assert_eq!(store1.len(), 2);
         assert!(store1.get_template("User <*> logged in").is_some());
         assert!(store1.get_template("Error: <*>").is_some());
+    }
+
+    #[test]
+    fn test_crdt_store_add_returns_same_id() {
+        let mut store = CRDTTemplateStore::new("node1".to_string());
+        let id1 = store.add_template("Pattern A".to_string());
+        let id2 = store.add_template("Pattern A".to_string());
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_crdt_store_import_template() {
+        let mut store = CRDTTemplateStore::new("node1".to_string());
+        store.import_template("Imported <*>".to_string(), 999, "node2");
+
+        assert!(store.get_template("Imported <*>").is_some());
+        assert_eq!(store.get_template("Imported <*>").unwrap().template_id, 999);
+        assert_eq!(
+            store.get_template("Imported <*>").unwrap().origin_node,
+            "node2"
+        );
+    }
+
+    #[test]
+    fn test_crdt_store_get_template_by_id() {
+        let mut store = CRDTTemplateStore::new("node1".to_string());
+        let id = store.add_template("Disk <*> warning".to_string());
+
+        let entry = store.get_template_by_id(id).unwrap();
+        assert_eq!(entry.pattern, "Disk <*> warning");
+    }
+
+    #[test]
+    fn test_crdt_store_record_and_retrieve_variables() {
+        let mut store = CRDTTemplateStore::new("node1".to_string());
+        let id = store.add_template("Login <*>".to_string());
+
+        store.record_variables(id, vec!["alice".to_string()]);
+        store.record_variables(id, vec!["bob".to_string()]);
+
+        let history = store.get_variable_history(id);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].variables, vec!["alice".to_string()]);
+        assert_eq!(history[1].variables, vec!["bob".to_string()]);
+    }
+
+    #[test]
+    fn test_crdt_store_empty_variable_history() {
+        let store = CRDTTemplateStore::new("node1".to_string());
+        let history = store.get_variable_history(9999);
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_crdt_store_all_templates() {
+        let mut store = CRDTTemplateStore::new("node1".to_string());
+        store.add_template("A".to_string());
+        store.add_template("B".to_string());
+
+        let all = store.all_templates();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_crdt_store_is_empty() {
+        let store = CRDTTemplateStore::new("node1".to_string());
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn test_crdt_store_node_id() {
+        let store = CRDTTemplateStore::new("my-node".to_string());
+        assert_eq!(store.node_id(), "my-node");
+    }
+
+    #[test]
+    fn test_crdt_store_merge_deduplicates_templates() {
+        let mut store1 = CRDTTemplateStore::new("node1".to_string());
+        let mut store2 = CRDTTemplateStore::new("node2".to_string());
+
+        store1.add_template("Shared template".to_string());
+        store2.add_template("Shared template".to_string());
+
+        store1.merge(&store2);
+        // Same pattern should still be one entry in the G-Set
+        assert_eq!(store1.len(), 1);
+    }
+
+    #[test]
+    fn test_orset_add_contains() {
+        let mut set: ORSet<String> = ORSet::new();
+        assert!(!set.contains(&"x".to_string()));
+        set.add("x".to_string(), "node1");
+        assert!(set.contains(&"x".to_string()));
+    }
+
+    #[test]
+    fn test_orset_remove() {
+        let mut set: ORSet<String> = ORSet::new();
+        set.add("x".to_string(), "node1");
+        assert!(set.contains(&"x".to_string()));
+        set.remove(&"x".to_string(), "node1");
+        assert!(!set.contains(&"x".to_string()));
+    }
+
+    #[test]
+    fn test_orset_merge() {
+        let mut set1: ORSet<String> = ORSet::new();
+        let mut set2: ORSet<String> = ORSet::new();
+
+        set1.add("a".to_string(), "node1");
+        set2.add("b".to_string(), "node2");
+
+        set1.merge(&set2);
+        assert!(set1.contains(&"a".to_string()));
+        assert!(set1.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_orset_elements() {
+        let mut set: ORSet<String> = ORSet::new();
+        set.add("a".to_string(), "node1");
+        set.add("b".to_string(), "node1");
+        set.remove(&"a".to_string(), "node1");
+
+        let live: Vec<String> = set.elements();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0], "b");
     }
 }

@@ -373,4 +373,106 @@ mod tests {
         assert_eq!(log1.len(), 2);
         assert_eq!(log2.len(), 2);
     }
+
+    #[test]
+    fn test_persistence_save_and_reload() {
+        let path = format!("/tmp/replog_{}.jsonl", std::process::id());
+
+        {
+            let mut log = ReplicationLog::with_persistence("node1".to_string(), &path).unwrap();
+            log.append(ReplicationOp::NewTemplate {
+                pattern: "Error: <*>".to_string(),
+                template_id: 10,
+            });
+            log.append(ReplicationOp::TemplateVariables {
+                template_id: 10,
+                variables: vec!["disk full".to_string()],
+                timestamp_ms: 1_700_000_000_000,
+            });
+        }
+
+        // Reload from disk
+        let reloaded = ReplicationLog::with_persistence("node1".to_string(), &path).unwrap();
+        assert_eq!(reloaded.len(), 2);
+        assert!(reloaded.has_template("Error: <*>"));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_get_templates() {
+        let mut log = ReplicationLog::new("node1".to_string());
+        log.append(ReplicationOp::NewTemplate {
+            pattern: "Login <*>".to_string(),
+            template_id: 1,
+        });
+        log.append(ReplicationOp::NewTemplate {
+            pattern: "Logout <*>".to_string(),
+            template_id: 2,
+        });
+        log.append(ReplicationOp::TemplateVariables {
+            template_id: 1,
+            variables: vec!["alice".to_string()],
+            timestamp_ms: 0,
+        });
+
+        let templates = log.get_templates();
+        assert_eq!(templates.len(), 2);
+        let patterns: Vec<String> = templates.into_iter().map(|(p, _)| p).collect();
+        assert!(patterns.contains(&"Login <*>".to_string()));
+        assert!(patterns.contains(&"Logout <*>".to_string()));
+    }
+
+    #[test]
+    fn test_has_template() {
+        let mut log = ReplicationLog::new("node1".to_string());
+        assert!(!log.has_template("User <*> logged in"));
+
+        log.append(ReplicationOp::NewTemplate {
+            pattern: "User <*> logged in".to_string(),
+            template_id: 1,
+        });
+
+        assert!(log.has_template("User <*> logged in"));
+    }
+
+    #[test]
+    fn test_entries_after_sequence() {
+        let mut log = ReplicationLog::new("node1".to_string());
+        log.append(ReplicationOp::NewTemplate {
+            pattern: "Pattern A".to_string(),
+            template_id: 1,
+        });
+        log.append(ReplicationOp::NewTemplate {
+            pattern: "Pattern B".to_string(),
+            template_id: 2,
+        });
+
+        let after_first = log.entries_after("node1", 0);
+        assert_eq!(after_first.len(), 1); // Only sequence 1 is > 0
+    }
+
+    #[test]
+    fn test_vector_clock_updated_on_append() {
+        let mut log = ReplicationLog::new("node1".to_string());
+        assert_eq!(log.current_clock().get("node1"), 0);
+
+        log.append(ReplicationOp::NewTemplate {
+            pattern: "P".to_string(),
+            template_id: 0,
+        });
+        assert_eq!(log.current_clock().get("node1"), 1);
+    }
+
+    #[test]
+    fn test_node_id() {
+        let log = ReplicationLog::new("my-node".to_string());
+        assert_eq!(log.node_id(), "my-node");
+    }
+
+    #[test]
+    fn test_is_empty_initially() {
+        let log = ReplicationLog::new("node1".to_string());
+        assert!(log.is_empty());
+    }
 }

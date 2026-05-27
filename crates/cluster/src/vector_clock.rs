@@ -157,4 +157,101 @@ mod tests {
         assert_eq!(vc1.get("node1"), 2);
         assert_eq!(vc1.get("node2"), 1);
     }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let mut vc = VectorClock::new();
+        vc.increment("node1");
+        vc.increment("node1");
+        vc.increment("node2");
+
+        let bytes = vc.to_bytes();
+        let recovered = VectorClock::from_bytes(&bytes).unwrap();
+
+        assert_eq!(recovered.get("node1"), 2);
+        assert_eq!(recovered.get("node2"), 1);
+    }
+
+    #[test]
+    fn test_from_bytes_invalid_data_returns_none() {
+        let result = VectorClock::from_bytes(b"not valid postcard data");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_sum() {
+        let mut vc = VectorClock::new();
+        vc.increment("node1");
+        vc.increment("node1");
+        vc.increment("node2");
+        assert_eq!(vc.sum(), 3);
+    }
+
+    #[test]
+    fn test_partial_cmp_equal() {
+        let mut vc1 = VectorClock::new();
+        let mut vc2 = VectorClock::new();
+        vc1.increment("node1");
+        vc2.increment("node1");
+        assert_eq!(vc1.partial_cmp(&vc2), Some(std::cmp::Ordering::Equal));
+    }
+
+    #[test]
+    fn test_partial_cmp_less() {
+        let mut vc1 = VectorClock::new();
+        let mut vc2 = VectorClock::new();
+        vc1.increment("node1");
+        vc2.increment("node1");
+        vc2.increment("node1");
+        assert_eq!(vc1.partial_cmp(&vc2), Some(std::cmp::Ordering::Less));
+    }
+
+    #[test]
+    fn test_partial_cmp_greater() {
+        let mut vc1 = VectorClock::new();
+        let mut vc2 = VectorClock::new();
+        vc1.increment("node1");
+        vc1.increment("node1");
+        vc2.increment("node1");
+        assert_eq!(vc1.partial_cmp(&vc2), Some(std::cmp::Ordering::Greater));
+    }
+
+    #[test]
+    fn test_partial_cmp_concurrent_returns_none() {
+        let mut vc1 = VectorClock::new();
+        let mut vc2 = VectorClock::new();
+        vc1.increment("node1");
+        vc2.increment("node2");
+        assert_eq!(vc1.partial_cmp(&vc2), None);
+    }
+
+    #[test]
+    fn test_nodes_iterator() {
+        let mut vc = VectorClock::new();
+        vc.increment("node1");
+        vc.increment("node2");
+        let nodes: Vec<&String> = vc.nodes().collect();
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn test_empty_clock_sum_is_zero() {
+        let vc = VectorClock::new();
+        assert_eq!(vc.sum(), 0);
+    }
+
+    #[test]
+    fn test_merge_takes_max() {
+        let mut vc1 = VectorClock::new();
+        let mut vc2 = VectorClock::new();
+        vc1.increment("node1");
+        vc1.increment("node1");
+        vc1.increment("node1"); // node1 = 3
+        vc2.increment("node1"); // node1 = 1
+        vc2.increment("node1"); // node1 = 2
+
+        vc2.merge(&vc1);
+        // Should keep max = 3
+        assert_eq!(vc2.get("node1"), 3);
+    }
 }

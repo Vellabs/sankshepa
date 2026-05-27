@@ -178,6 +178,23 @@ mod tests {
     use sankshepa_protocol::SyslogMessage;
     use std::fs;
 
+    fn make_msg(text: &str, hostname: &str, is_rfc5424: bool) -> SyslogMessage {
+        SyslogMessage {
+            priority: 34,
+            facility: 4,
+            severity: 2,
+            timestamp: Some(Utc::now()),
+            hostname: Some(hostname.to_string()),
+            app_name: Some("testapp".to_string()),
+            procid: None,
+            msgid: None,
+            structured_data: None,
+            message: text.to_string(),
+            is_rfc5424,
+            node_id: None,
+        }
+    }
+
     #[test]
     fn test_storage_save_load() {
         let mut chunk = LogChunk::new();
@@ -198,11 +215,11 @@ mod tests {
         chunk.add_message(msg);
         chunk.finish_and_process();
 
-        let path = "test_chunk.lshrink";
+        let path = format!("/tmp/test_chunk_{}.lshrink", std::process::id());
 
-        StorageEngine::save_chunk(chunk, path).unwrap();
+        StorageEngine::save_chunk(chunk, &path).unwrap();
 
-        let loaded_chunk = StorageEngine::load_chunk(path).unwrap();
+        let loaded_chunk = StorageEngine::load_chunk(&path).unwrap();
 
         assert_eq!(loaded_chunk.records.len(), 1);
         let hostname = loaded_chunk.records[0]
@@ -217,6 +234,73 @@ mod tests {
         assert_eq!(app_name, "testapp");
         assert_eq!(loaded_chunk.templates.len(), 1);
 
-        fs::remove_file(path).unwrap();
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_multiple_records_roundtrip() {
+        let mut chunk = LogChunk::new();
+        chunk.add_message(make_msg(
+            "User alice logged in from 192.168.1.1",
+            "host1",
+            false,
+        ));
+        chunk.add_message(make_msg(
+            "User bob logged in from 192.168.1.2",
+            "host2",
+            false,
+        ));
+        chunk.add_message(make_msg("System restart initiated", "host1", true));
+        chunk.finish_and_process();
+
+        let path = format!("/tmp/test_multi_{}.lshrink", std::process::id());
+        let size = StorageEngine::save_chunk(chunk, &path).unwrap();
+        assert!(size > 0);
+
+        let loaded = StorageEngine::load_chunk(&path).unwrap();
+        assert_eq!(loaded.records.len(), 3);
+        // Two similar login messages should merge into one template
+        assert!(loaded.templates.len() <= 3);
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_empty_chunk_produces_no_records() {
+        let mut chunk = LogChunk::new();
+        // No messages added, so finish_and_process produces no records
+        chunk.finish_and_process();
+
+        let path = format!("/tmp/test_empty_{}.lshrink", std::process::id());
+        // save_chunk with empty records still writes a valid (empty) file
+        StorageEngine::save_chunk(chunk, &path).unwrap();
+
+        let loaded = StorageEngine::load_chunk(&path).unwrap();
+        assert_eq!(loaded.records.len(), 0);
+        assert_eq!(loaded.templates.len(), 0);
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_rfc5424_flag_preserved() {
+        let mut chunk = LogChunk::new();
+        chunk.add_message(make_msg("RFC5424 event", "host", true));
+        chunk.finish_and_process();
+
+        let path = format!("/tmp/test_rfc5424_{}.lshrink", std::process::id());
+        StorageEngine::save_chunk(chunk, &path).unwrap();
+
+        let loaded = StorageEngine::load_chunk(&path).unwrap();
+        assert_eq!(loaded.records.len(), 1);
+        assert!(loaded.records[0].is_rfc5424);
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_load_nonexistent_file_errors() {
+        let result = StorageEngine::load_chunk("/tmp/definitely_does_not_exist.lshrink");
+        assert!(result.is_err());
     }
 }

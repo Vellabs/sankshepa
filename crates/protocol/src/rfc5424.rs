@@ -139,4 +139,55 @@ mod tests {
         assert_eq!(msg.structured_data.unwrap(), "exampleSDID@32473 iut=\"3\"");
         assert_eq!(msg.message, "Message with SD");
     }
+
+    #[test]
+    fn test_parse_rfc5424_nil_hostname() {
+        let input = "<34>1 2003-10-11T22:14:15.003Z - myapp 1234 ID47 - No hostname";
+        let msg = RFC5424Parser::parse(input).unwrap();
+        assert!(msg.hostname.is_none());
+        assert_eq!(msg.app_name.unwrap(), "myapp");
+    }
+
+    #[test]
+    fn test_parse_rfc5424_all_nil_optional_fields() {
+        let input = "<13>1 2003-10-11T22:14:15.003Z - - - - - Minimal message";
+        let msg = RFC5424Parser::parse(input).unwrap();
+        assert!(msg.hostname.is_none());
+        assert!(msg.app_name.is_none());
+        assert!(msg.procid.is_none());
+        assert!(msg.msgid.is_none());
+        assert!(msg.structured_data.is_none());
+        assert_eq!(msg.message, "Minimal message");
+    }
+
+    #[test]
+    fn test_parse_rfc5424_nil_timestamp() {
+        let input = "<34>1 - myhost myapp 1234 ID47 - Message";
+        let msg = RFC5424Parser::parse(input).unwrap();
+        assert!(msg.timestamp.is_none());
+    }
+
+    #[test]
+    fn test_parse_rfc5424_procid_and_msgid() {
+        let input = "<34>1 2003-10-11T22:14:15.003Z myhost myapp 9876 MSGID47 - Test";
+        let msg = RFC5424Parser::parse(input).unwrap();
+        assert_eq!(msg.procid.unwrap(), "9876");
+        assert_eq!(msg.msgid.unwrap(), "MSGID47");
+    }
+
+    #[test]
+    fn test_parse_rfc5424_invalid_input() {
+        let input = "not a syslog message at all";
+        assert!(RFC5424Parser::parse(input).is_err());
+    }
+
+    #[test]
+    fn test_parse_rfc5424_facility_severity_calculation() {
+        // priority 165 -> facility = 165 >> 3 = 20, severity = 165 & 7 = 5
+        let input = "<165>1 2003-10-11T22:14:15.003Z host app - - - msg";
+        let msg = RFC5424Parser::parse(input).unwrap();
+        assert_eq!(msg.priority, 165);
+        assert_eq!(msg.facility, 20);
+        assert_eq!(msg.severity, 5);
+    }
 }
