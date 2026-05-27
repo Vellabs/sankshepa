@@ -215,7 +215,10 @@ mod tests {
         chunk.add_message(msg);
         chunk.finish_and_process();
 
-        let path = format!("/tmp/test_chunk_{}.lshrink", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("test_chunk_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
 
         StorageEngine::save_chunk(chunk, &path).unwrap();
 
@@ -253,7 +256,10 @@ mod tests {
         chunk.add_message(make_msg("System restart initiated", "host1", true));
         chunk.finish_and_process();
 
-        let path = format!("/tmp/test_multi_{}.lshrink", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("test_multi_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let size = StorageEngine::save_chunk(chunk, &path).unwrap();
         assert!(size > 0);
 
@@ -271,7 +277,10 @@ mod tests {
         // No messages added, so finish_and_process produces no records
         chunk.finish_and_process();
 
-        let path = format!("/tmp/test_empty_{}.lshrink", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("test_empty_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         // save_chunk with empty records still writes a valid (empty) file
         StorageEngine::save_chunk(chunk, &path).unwrap();
 
@@ -288,7 +297,10 @@ mod tests {
         chunk.add_message(make_msg("RFC5424 event", "host", true));
         chunk.finish_and_process();
 
-        let path = format!("/tmp/test_rfc5424_{}.lshrink", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("test_rfc5424_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         StorageEngine::save_chunk(chunk, &path).unwrap();
 
         let loaded = StorageEngine::load_chunk(&path).unwrap();
@@ -300,7 +312,12 @@ mod tests {
 
     #[test]
     fn test_storage_load_nonexistent_file_errors() {
-        let result = StorageEngine::load_chunk("/tmp/definitely_does_not_exist.lshrink");
+        let result = StorageEngine::load_chunk(
+            std::env::temp_dir()
+                .join("definitely_does_not_exist.lshrink")
+                .to_str()
+                .unwrap(),
+        );
         assert!(result.is_err());
     }
 }

@@ -376,7 +376,10 @@ mod tests {
 
     #[test]
     fn test_persistence_save_and_reload() {
-        let path = format!("/tmp/replog_{}.jsonl", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("replog_{}.jsonl", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
 
         {
             let mut log = ReplicationLog::with_persistence("node1".to_string(), &path).unwrap();

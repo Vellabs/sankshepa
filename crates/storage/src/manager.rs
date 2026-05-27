@@ -255,7 +255,10 @@ mod tests {
 
     #[test]
     fn test_write_chunk_to_lshrink_file() {
-        let path = format!("/tmp/mgr_direct_{}.lshrink", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("mgr_direct_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let mgr = StorageManager::new(&path, 1024 * 1024, 24);
         let chunk = make_chunk_with_msg("Direct file write");
 
@@ -268,7 +271,10 @@ mod tests {
 
     #[test]
     fn test_write_chunk_to_directory_creates_bucket() {
-        let dir = format!("/tmp/mgr_dir_{}", std::process::id());
+        let dir = std::env::temp_dir()
+            .join(format!("mgr_dir_{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let mgr = StorageManager::new(&dir, 1024 * 1024 * 10, 24);
         let chunk = make_chunk_with_msg("Bucketed write");
 
@@ -292,7 +298,10 @@ mod tests {
 
     #[test]
     fn test_empty_chunk_is_not_written() {
-        let path = format!("/tmp/mgr_empty_{}.lshrink", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("mgr_empty_{}.lshrink", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let mgr = StorageManager::new(&path, 1024 * 1024, 24);
 
         // Chunk with no records
@@ -307,7 +316,10 @@ mod tests {
 
     #[test]
     fn test_query_all_finds_written_chunks() {
-        let dir = format!("/tmp/mgr_query_{}", std::process::id());
+        let dir = std::env::temp_dir()
+            .join(format!("mgr_query_{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let mgr = StorageManager::new(&dir, 1024 * 1024 * 10, 24);
 
         mgr.write_chunk(make_chunk_with_msg("First chunk")).unwrap();
@@ -329,7 +341,10 @@ mod tests {
 
     #[test]
     fn test_enforce_retention_flag_prevents_concurrent_runs() {
-        let dir = format!("/tmp/mgr_retention_{}", std::process::id());
+        let dir = std::env::temp_dir()
+            .join(format!("mgr_retention_{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let mgr = StorageManager::new(&dir, 1024 * 1024 * 10, 24);
 
         // Trigger retention twice rapidly; flag should prevent a second thread launch
